@@ -12,8 +12,7 @@ UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* fd, void* buf, size_t len, int64_t o
         ec = fd->pread(fd, _buf, len, off, &read);
         if(ec == 0) {
             if(read == 0) {
-                memset(_buf, 0, len);
-                break;
+                return UFS_ERROR_READ_NOT_ENOUGH;
             }
             _buf += read;
             len -= read;
@@ -57,7 +56,7 @@ UFS_HIDDEN int ufs_fd_copy(ufs_fd_t* fd, int64_t off_in, int64_t off_out, size_t
             if(ec) {
                 if(ec != EAGAIN && ec != EWOULDBLOCK) goto do_return;
             } else {
-                if(nread == 0) { ec = EINVAL; goto do_return; }
+                if(nread == 0) { ec = UFS_ERROR_READ_NOT_ENOUGH; goto do_return; }
             }
         }
 
@@ -137,10 +136,19 @@ do_return:
         fd = ul_reinterpret_cast(_ufs_fd_file_t*, ufs_realloc(NULL, sizeof(_ufs_fd_file_t)));
         if(ul_unlikely(fd == NULL)) return ENOMEM;
 
-        err = ulfd_open(&fd->fd, path, ULFD_O_RDWR | ULFD_O_CREAT, 0664);
+        err = ulfd_open(&fd->fd, path, ULFD_O_RDWR, 0664);
         if(err) { ufs_free(fd); return err; }
+
+        // 锁定文件，避免第二个进程进行读写
         err = ulfd_lock(fd->fd, 0, UFS_BNUM_START * UFS_BLOCK_SIZE, ULFD_F_WRLCK);
         if(err) { ulfd_close(fd->fd); ufs_free(fd); return err; }
+
+        { // 检查文件大小是否是整块数
+            ulfd_stat_t stat;
+            err = ulfd_stat(path, &stat);
+            if(ul_unlikely(err)) return err;
+            if(stat.size % UFS_BLOCK_SIZE != 0) { ulfd_close(fd->fd); ufs_free(fd); return UFS_ERROR_BROKEN_DISK; }
+        }
 
         fd->b.type = _ufs_fd_file_type;
         fd->b.close = &_ufs_fd_file_close;

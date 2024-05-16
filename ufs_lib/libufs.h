@@ -24,6 +24,33 @@
 extern "C" {
 #endif
 
+
+/**
+ * 错误代码
+ * 
+ * 部分代码我们难以准确地使用Unix style的error code表示，因此我们使用负数来表示这些错误
+ * 如果你确实需要统一使用Unix Style的error code，可以使用ufs_uniform_error函数。
+*/
+
+// 错误：未知错误
+#define UFS_ERROR_UNKOWN -1 
+// 错误：无法读入足够的字节（这通常是因为遇到了EOF，但是我们的磁盘文件是对齐BLOCK_SIZE的，这个不应当发生）
+#define UFS_ERROR_READ_NOT_ENOUGH -2
+// 错误：磁盘已损坏（这通常是因为磁盘文件被外部程序进行了不正确的修改）
+#define UFS_ERROR_BROKEN_DISK -2
+// 错误：互斥锁已损坏（这几乎不会发生，但是我们依然会进行判断）
+#define UFS_ERROR_BROKEN_MUTEX -3
+
+// 获得error对应的解释字符串，对于Unix style的error code，这将直接使用系统的错误信息
+UFS_API const char* ufs_strerror(int error);
+UFS_API int ufs_uniform_error(int error);
+
+
+/**
+ * 文件描述符
+*/
+
+
 typedef struct ufs_fd_t {
     const char* type;
 
@@ -41,45 +68,53 @@ UFS_API int ufs_fd_open_file(ufs_fd_t** pfd, const char* path);
 UFS_API int ufs_fd_is_file(ufs_fd_t* fd);
 
 
+/**
+ * 配置
+*/
 
-#define UFS_MAGIC1 (67)
-#define UFS_MAGIC2 (74)
 
-#define UFS_NAME_MAX (64-1)
-#define UFS_BLOCK_SIZE (4096)
-#define UFS_INODE_DEFAULT_RATIO (16*4096)
+#define UFS_USE_UNIFORM_ERROR_CODE 0 // 使用统一的Unix style错误代码（默认不使用）
 
-#define UFS_BNUM_COMPACT (0)
-#define UFS_BNUM_SB (1)
-#define UFS_BNUM_JORNAL (2)
-#define UFS_BNUM_FREESTACK (3)
-#define UFS_BNUM_START (UFS_BNUM_FREESTACK + 1)
+#define UFS_MAGIC1 (67) // 魔数1
+#define UFS_MAGIC2 (74) // 魔数2
 
-#define UFS_JORNAL_NUM 16
-#define UFS_BLIST_STACK_MAX 10
+#define UFS_NAME_MAX (64-1) // 目录最大名称长度（建议为2的指数-1）
+#define UFS_BLOCK_SIZE (4096) // 块的大小（必须是2的指数）
+#define UFS_INODE_DEFAULT_RATIO (16*1024) // inode的默认比值（每16KB添加一个inode）
+
+#define UFS_JORNAL_NUM 32 // 最大日志数量
+#define UFS_BLIST_STACK_MAX 10 // 成组链接法最大长度
+
+#define UFS_BNUM_COMPACT (0) // 块号：兼容块（不使用此块，以便兼容BIOS/UEFI）
+#define UFS_BNUM_SB (1) // 块号：超级块
+#define UFS_BNUM_JORNAL (2) // 块号：日志块（当存储空间不够时，使用此块慢慢拷写）
+#define UFS_BNUM_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：开始块
+
+
+/**
+ * 
+*/
+
 
 typedef struct ufs_sb_t {
     uint8_t magic[2]; // 魔数
-    uint8_t ext_offset;
+    uint8_t ext_offset; // 扩展标记（仅作向后兼容，当前版本为0）
 
 #define UFS_JORNAL_OFFSET offsetof(ufs_sb_t, jornal_start0)
-    uint8_t jornal_start0;
-    uint8_t jornal_start1;
-    struct {
-        uint64_t backup_bnum;
-        uint64_t target_bnum;
-    } jornal[UFS_JORNAL_NUM];
-    uint8_t jornal_last1;
-    uint8_t jornal_last0;
-    uint8_t block_size_log2;
+    uint8_t jornal_start0; // 日志起始标记0
+    uint8_t jornal_start1; // 日志起始标记1
+    uint64_t jornal[UFS_JORNAL_NUM]; // 日志
+    uint8_t jornal_last1; // 日志终止标记1
+    uint8_t jornal_last0; // 日志终止标记0
+    uint8_t block_size_log2; // 块的大小（2的指数）
     uint8_t _jd2;
     uint32_t _jd3;
 
     uint64_t inode_blocks; // inode块数
     uint64_t zone_blocks; // zone块数
 
-    uint64_t ilist[UFS_BLIST_STACK_MAX];
-    uint64_t zlist[UFS_BLIST_STACK_MAX];
+    uint64_t inode_start;
+    uint64_t zone_start;
 } ufs_sb_t;
 int s[sizeof(ufs_sb_t)];
 

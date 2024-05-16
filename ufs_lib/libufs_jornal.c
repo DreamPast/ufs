@@ -9,17 +9,14 @@ typedef struct _sb_jornal_t {
     uint16_t _jd1;
     uint8_t jornal_start0;
     uint8_t jornal_start1;
-    struct {
-        uint64_t backup_bnum;
-        uint64_t target_bnum;
-    } jornal[UFS_JORNAL_NUM];
+    uint64_t jornal[UFS_JORNAL_NUM];
     uint8_t jornal_last1;
     uint8_t jornal_last0;
     uint16_t _jd2;
     uint32_t _jd3;
 } _sb_jornal_t;
 #define _sb_jornal_start(p) (&(p)->jornal_start0)
-#define _sb_jornal_size (4 + 16 * UFS_JORNAL_NUM)
+#define _sb_jornal_size (4 + 8 * UFS_JORNAL_NUM)
 
 static int _remove_flag1(ufs_fd_t* fd) {
     int ec;
@@ -52,16 +49,13 @@ static int _do_jornal(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
     disk.jornal_start0 = 0xFF;
     disk.jornal_start1 = 0xFF;
     for(i = 0; i < num; ++i) {
+        disk.jornal[i] = ul_trans_u64_le(ops[i].bnum);
         ec = ufs_fd_copy(fd,
-            ufs_fd_offset(ops[i].target_bnum), ufs_fd_offset(ops[i].backup_bnum), UFS_BLOCK_SIZE);
+            ufs_fd_offset(ops[i].bnum), ufs_fd_offset(UFS_BNUM_JORNAL + i), UFS_BLOCK_SIZE);
         if(ul_unlikely(ec)) return ec;
-        disk.jornal[i].backup_bnum = ul_trans_u64_le(ops[i].backup_bnum);
-        disk.jornal[i].target_bnum = ul_trans_u64_le(ops[i].target_bnum);
     }
-    for(; i < UFS_JORNAL_NUM; ++i) {
-        disk.jornal[i].backup_bnum = 0;
-        disk.jornal[i].target_bnum = 0;
-    }
+    for(; i < UFS_JORNAL_NUM; ++i)
+        disk.jornal[i] = 0;
     disk.jornal_last0 = 0xFF;
     disk.jornal_last1 = 0xFF;
 
@@ -71,7 +65,7 @@ static int _do_jornal(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
     if(ul_unlikely(ec)) return ec;
 
     for(i = 0; i < UFS_JORNAL_NUM; ++i) {
-        ec = ufs_fd_pwrite_check(fd, ops[i].buf, UFS_BLOCK_SIZE, ufs_fd_offset(ops[i].target_bnum));
+        ec = ufs_fd_pwrite_check(fd, ops[i].buf, UFS_BLOCK_SIZE, ufs_fd_offset(ops[i].bnum));
         if(ul_unlikely(ec)) return ec;
     }
     ec = fd->sync(fd);
@@ -112,11 +106,8 @@ static int _fix_jornal(ufs_fd_t* fd, const ufs_sb_t* sb) {
 
     case 0xF:
         for(i = 0; i < UFS_JORNAL_NUM; ++i)
-            if(sb->jornal[i].target_bnum)
-                ec = ufs_fd_copy(fd,
-                    ufs_fd_offset(ul_trans_u64_le(sb->jornal[i].backup_bnum)),
-                    ufs_fd_offset(ul_trans_u64_le(sb->jornal[i].target_bnum)),
-                    UFS_BLOCK_SIZE);
+            if(sb->jornal[i])
+                ec = ufs_fd_copy(fd, ufs_fd_offset(UFS_BNUM_JORNAL + i), ufs_fd_offset(ul_trans_u64_le(sb->jornal[i])), UFS_BLOCK_SIZE);
         disk.jornal_start0 = 0;
         disk.jornal_last0 = 0;
         disk.jornal_start1 = 0;
@@ -132,12 +123,13 @@ static int _fix_jornal(ufs_fd_t* fd, const ufs_sb_t* sb) {
         return __ufs_jornal_remove_flag2(fd);
 
     case 0xA: case 0x5:
-        return EINVAL;
+        return UFS_ERROR_BROKEN_DISK;
     }
 }
 
 
 // TODO: 更完善的互斥锁错误信息
+
 UFS_HIDDEN int ufs_init_jornal(ufs_jornal_t* jornal) {
     return ulmtx_init(&jornal->mtx) ? EINVAL : 0;
 }
@@ -146,23 +138,25 @@ UFS_HIDDEN void ufs_deinit_jornal(ufs_jornal_t* jornal) {
 }
 UFS_HIDDEN int ufs_fix_jornal(ufs_jornal_t* jornal, ufs_fd_t* fd, ufs_sb_t* sb) {
     int ec;
-    if(ulmtx_lock(&jornal->mtx)) return EINVAL;
+    if(ulmtx_lock(&jornal->mtx)) return UFS_ERROR_BROKEN_MUTEX;
     ec = _fix_jornal(fd, sb);
     if(ul_likely(!ec)) memset(ul_reinterpret_cast(char*, sb) + UFS_JORNAL_OFFSET, 0, _sb_jornal_size);
     ulmtx_unlock(&jornal->mtx);
     return ec;
 }
-UFS_HIDDEN int ufs_do_jornal(ufs_jornal_t* jornal, ufs_fd_t* fd, const ufs_sb_t* sb, ufs_jornal_op_t* ops, int n, int wait) {
+UFS_HIDDEN int ufs_do_jornal(
+    ufs_jornal_t* jornal, ufs_fd_t* fd, const ufs_sb_t* sb, int wait,
+    ufs_jornal_op_t* ops, int n
+) {
     int ec;
     if(wait)
-        if(ulmtx_lock(&jornal->mtx)) return EINVAL;
+        if(ulmtx_lock(&jornal->mtx)) return UFS_ERROR_BROKEN_MUTEX;
     else {
         ec = ulmtx_trylock(&jornal->mtx);
         if(ec == 1) return EBUSY;
-        if(ec) return EINVAL;
+        if(ec) return UFS_ERROR_BROKEN_MUTEX;
     }
 
-    if(ulmtx_lock(&jornal->mtx)) return EINVAL;
     ec = _do_jornal(fd, ops, n);
     ulmtx_unlock(&jornal->mtx);
     return ec;
