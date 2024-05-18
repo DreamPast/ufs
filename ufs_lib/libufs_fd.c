@@ -1,12 +1,10 @@
-#include "libufs.h"
 #include "libufs_internel.h"
 #include "ulfd.h"
-#include "ulatomic.h"
 
 UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* fd, void* buf, size_t len, int64_t off) {
     char* _buf = ul_reinterpret_cast(char*, buf);
     size_t read;
-    int ec;
+    int ec = 0;
 
     while(len) {
         ec = fd->pread(fd, _buf, len, off, &read);
@@ -24,7 +22,7 @@ UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* fd, void* buf, size_t len, int64_t o
 UFS_HIDDEN int ufs_fd_pwrite_check(ufs_fd_t* fd, const void* buf, size_t len, int64_t off) {
     const char* _buf = ul_reinterpret_cast(const char*, buf);
     size_t writen;
-    int ec;
+    int ec = 0;
 
     while(len) {
         ec = fd->pwrite(fd, _buf, len, off, &writen);
@@ -40,7 +38,7 @@ UFS_HIDDEN int ufs_fd_pwrite_check(ufs_fd_t* fd, const void* buf, size_t len, in
 UFS_HIDDEN int ufs_fd_copy(ufs_fd_t* fd, int64_t off_in, int64_t off_out, size_t len) {
     char* cache;
     size_t cache_len = len;
-    int ec;
+    int ec = 0;
     size_t nread, nwrite;
 
     while(cache_len) {
@@ -107,7 +105,7 @@ do_return:
         } while(0);
         ulatomic_spinlock_unlock(&_fd->lck);
     #else
-        return ulfd_pread(fd, buf, len, off, pread);
+        return ulfd_pread(_fd, buf, len, off, pread);
     #endif
     }
     static int _ufs_fd_file_pwrite(ufs_fd_t* fd, const void* buf, size_t len, int64_t off, size_t* pwriten) {
@@ -122,7 +120,7 @@ do_return:
         } while(0);
         ulatomic_spinlock_unlock(&_fd->lck);
     #else
-        return ulfd_pwrite(fd, buf, len, off, pwriten);
+        return ulfd_pwrite(_fd, buf, len, off, pwriten);
     #endif
 
     }
