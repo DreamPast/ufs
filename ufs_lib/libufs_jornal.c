@@ -46,6 +46,7 @@ static int _do_jornal(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
     int i;
     _sb_jornal_t disk;
 
+    // 1. 备份区块
     disk.jornal_start0 = 0xFF;
     disk.jornal_start1 = 0xFF;
     for(i = 0; i < num; ++i) {
@@ -59,11 +60,13 @@ static int _do_jornal(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
     disk.jornal_last0 = 0xFF;
     disk.jornal_last1 = 0xFF;
 
+    // 2. 将四个标记和日志偏移量写入
     ec = ufs_fd_pwrite_check(fd, _sb_jornal_start(&disk), _sb_jornal_size, ufs_fd_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
     if(ul_unlikely(ec)) return ec;
     ec = fd->sync(fd);
     if(ul_unlikely(ec)) return ec;
 
+    // 3. 写入区块
     for(i = 0; i < UFS_JORNAL_NUM; ++i) {
         ec = ufs_fd_pwrite_check(fd, ops[i].buf, UFS_BLOCK_SIZE, ufs_fd_offset(ops[i].bnum));
         if(ul_unlikely(ec)) return ec;
@@ -71,9 +74,11 @@ static int _do_jornal(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
     ec = fd->sync(fd);
     if(ul_unlikely(ec)) return ec;
 
+    // 4. 擦除标记1
     ec = _remove_flag1(fd);
     if(ul_unlikely(ec)) return ec;
 
+    // 5. 擦除标记0
     ec = _remove_flag2(fd);
     if(ul_unlikely(ec)) return ec;
 
@@ -87,17 +92,18 @@ static int _fix_jornal(ufs_fd_t* fd, const ufs_sb_t* sb) {
     memset(&disk, 0, sizeof(disk));
 
     switch(
-        (__ufs_jornal_istrue(sb->jornal_start0) << 3) | (__ufs_jornal_istrue(sb->jornal_start1) << 2) |
-        (__ufs_jornal_istrue(sb->jornal_last1) << 1) | (__ufs_jornal_istrue(sb->jornal_last1) << 0)
+        (_istrue(sb->jornal_start0) << 3) | (_istrue(sb->jornal_start1) << 2) |
+        (_istrue(sb->jornal_last1) << 1) | (_istrue(sb->jornal_last1) << 0)
     ) {
     case 0x0:
-        // 正常状态
+        // 初始状态/标记写入未开始
         return 0;
 
     case 0x8: case 0x4: case 0x2: case 0x1:
     case 0xC: case 0x3:
-
+        // 标记写入未完成但偏移量未写入/标记0擦除未完成
     case 0xE: case 0x7: case 0x6:
+        // 标记写入未完成但偏移量已写入
         disk.jornal_start0 = 0;
         disk.jornal_last0 = 0;
         disk.jornal_start1 = 0;
@@ -105,6 +111,7 @@ static int _fix_jornal(ufs_fd_t* fd, const ufs_sb_t* sb) {
         return ufs_fd_pwrite_check(fd, _sb_jornal_start(&disk), _sb_jornal_size, ufs_fd_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
 
     case 0xF:
+        // 写入区块未完成/标记擦除未开始
         for(i = 0; i < UFS_JORNAL_NUM; ++i)
             if(sb->jornal[i])
                 ec = ufs_fd_copy(fd, ufs_fd_offset(UFS_BNUM_JORNAL + i), ufs_fd_offset(ul_trans_u64_le(sb->jornal[i])), UFS_BLOCK_SIZE);
@@ -115,46 +122,48 @@ static int _fix_jornal(ufs_fd_t* fd, const ufs_sb_t* sb) {
         return ufs_fd_pwrite_check(fd, _sb_jornal_start(&disk), _sb_jornal_size, ufs_fd_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
 
     case 0xB: case 0xD:
-        ec = __ufs_jornal_remove_flag1(fd);
+        // 标记1擦除未完成
+        ec = _remove_flag1(fd);
         if(ul_unlikely(ec)) return ec;
-        return __ufs_jornal_remove_flag2(fd);
+        return _remove_flag2(fd);
 
     case 0x9:
-        return __ufs_jornal_remove_flag2(fd);
+        // 标记0擦除未开始
+        return _remove_flag2(fd);
 
     case 0xA: case 0x5:
+        // 非法中间状态
         return UFS_ERROR_BROKEN_DISK;
     }
+    return UFS_ERROR_BROKEN_DISK;
 }
 
-
-// TODO: 更完善的互斥锁错误信息
-
-UFS_HIDDEN int ufs_init_jornal(ufs_jornal_t* jornal) {
-    return ulmtx_init(&jornal->mtx) ? EINVAL : 0;
+UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* jornal) {
+    return ulmtx_init(&jornal->mtx);
 }
-UFS_HIDDEN void ufs_deinit_jornal(ufs_jornal_t* jornal) {
+UFS_HIDDEN void ufs_jornal_deinit(ufs_jornal_t* jornal) {
     ulmtx_destroy(&jornal->mtx);
 }
-UFS_HIDDEN int ufs_fix_jornal(ufs_jornal_t* jornal, ufs_fd_t* fd, ufs_sb_t* sb) {
+UFS_HIDDEN int ufs_jornal_fix(ufs_jornal_t* jornal, ufs_fd_t* fd, const ufs_sb_t* sb) {
     int ec;
-    if(ulmtx_lock(&jornal->mtx)) return UFS_ERROR_BROKEN_MUTEX;
+    ec = ulmtx_lock(&jornal->mtx);
+    if(ul_unlikely(ec)) return ec;
     ec = _fix_jornal(fd, sb);
     if(ul_likely(!ec)) memset(ul_reinterpret_cast(char*, sb) + UFS_JORNAL_OFFSET, 0, _sb_jornal_size);
     ulmtx_unlock(&jornal->mtx);
     return ec;
 }
-UFS_HIDDEN int ufs_do_jornal(
-    ufs_jornal_t* jornal, ufs_fd_t* fd, const ufs_sb_t* sb, int wait,
+UFS_HIDDEN int ufs_jornal_do(
+    ufs_jornal_t* jornal, ufs_fd_t* fd, int wait,
     ufs_jornal_op_t* ops, int n
 ) {
     int ec;
-    if(wait)
-        if(ulmtx_lock(&jornal->mtx)) return UFS_ERROR_BROKEN_MUTEX;
-    else {
+    if(wait) {
+        ec = ulmtx_lock(&jornal->mtx);
+        if(ul_unlikely(ec)) return ec;
+    } else {
         ec = ulmtx_trylock(&jornal->mtx);
-        if(ec == 1) return EBUSY;
-        if(ec) return UFS_ERROR_BROKEN_MUTEX;
+        if(ul_unlikely(ec)) return ec;
     }
 
     ec = _do_jornal(fd, ops, n);

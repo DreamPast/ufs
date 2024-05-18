@@ -6,6 +6,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
+#include <assert.h>
 
 #ifdef UFS_BUILD_DLL
     #ifdef _WIN32
@@ -15,6 +16,8 @@
 #ifndef UFS_API
     #define UFS_API
 #endif
+
+#define ufs_assert(cond) assert(cond)
 
 #define ufs_realloc(ptr, sz) realloc((ptr), (sz))
 #define ufs_free(ptr) free(ptr)
@@ -38,11 +41,10 @@ extern "C" {
 #define UFS_ERROR_READ_NOT_ENOUGH -2
 // 错误：磁盘已损坏（这通常是因为磁盘文件被外部程序进行了不正确的修改）
 #define UFS_ERROR_BROKEN_DISK -2
-// 错误：互斥锁已损坏（这几乎不会发生，但是我们依然会进行判断）
-#define UFS_ERROR_BROKEN_MUTEX -3
 
 // 获得error对应的解释字符串，对于Unix style的error code，这将直接使用系统的错误信息
 UFS_API const char* ufs_strerror(int error);
+// 将文件系统的自定义错误统一到Unix Style的error code
 UFS_API int ufs_uniform_error(int error);
 
 
@@ -55,15 +57,16 @@ typedef struct ufs_fd_t {
     const char* type;
 
     // 关闭文件
-    void (*close)(ufs_fd_t* fd);
+    void (*close)(struct ufs_fd_t* fd);
 
     // 带偏移量的读取
-    int (*pread)(ufs_fd_t* fd, void* buf, size_t len, int64_t off, size_t* pread);
+    int (*pread)(struct ufs_fd_t* fd, void* buf, size_t len, int64_t off, size_t* pread);
     // 带偏移量的写入
-    int (*pwrite)(ufs_fd_t* fd, const void* buf, size_t len, int64_t off, size_t* pwriten);
+    int (*pwrite)(struct ufs_fd_t* fd, const void* buf, size_t len, int64_t off, size_t* pwriten);
     // 同步文件
-    int (*sync)(ufs_fd_t* fd);
+    int (*sync)(struct ufs_fd_t* fd);
 } ufs_fd_t;
+// 打开一个文件，当文件不存在/没有对齐到块数/无法独立占有文件时报错
 UFS_API int ufs_fd_open_file(ufs_fd_t** pfd, const char* path);
 UFS_API int ufs_fd_is_file(ufs_fd_t* fd);
 
@@ -73,7 +76,8 @@ UFS_API int ufs_fd_is_file(ufs_fd_t* fd);
 */
 
 
-#define UFS_USE_UNIFORM_ERROR_CODE 0 // 使用统一的Unix style错误代码（默认不使用）
+#define UFS_USE_UNIFORM_ERROR_CODE 1 // 使用统一的Unix style错误代码（默认使用）
+#define UFS_ENABLE_THREAD_SAFE 1 // 开启多线程安全
 
 #define UFS_MAGIC1 (67) // 魔数1
 #define UFS_MAGIC2 (74) // 魔数2
@@ -87,13 +91,8 @@ UFS_API int ufs_fd_is_file(ufs_fd_t* fd);
 
 #define UFS_BNUM_COMPACT (0) // 块号：兼容块（不使用此块，以便兼容BIOS/UEFI）
 #define UFS_BNUM_SB (1) // 块号：超级块
-#define UFS_BNUM_JORNAL (2) // 块号：日志块（当存储空间不够时，使用此块慢慢拷写）
+#define UFS_BNUM_JORNAL (2) // 块号：日志块
 #define UFS_BNUM_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：开始块
-
-
-/**
- * 
-*/
 
 
 typedef struct ufs_sb_t {
@@ -160,7 +159,6 @@ typedef struct myfs_inode_t {
 
 struct ufs_t;
 typedef struct ufs_t ufs_t;
-
 
 
 
