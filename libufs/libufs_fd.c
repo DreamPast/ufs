@@ -78,6 +78,16 @@ do_return:
     ul_free(cache);
     return ec;
 }
+UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
+    int ec;
+    static const char zeros[1024] = { 0 };
+    while(len > 1024) {
+        ec = ufs_fd_pwrite_check(fd, zeros, sizeof(zeros), off);
+        if(ul_unlikely(ec)) return ec;
+        off += sizeof(zeros);
+    }
+    return ufs_fd_pwrite_check(fd, zeros, len, off);
+}
 
 #if 1
     typedef struct _fd_file_t {

@@ -92,11 +92,12 @@ UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
 #define UFS_INODE_DEFAULT_RATIO (16*1024) // inode的默认比值（每16KB添加一个inode）
 
 #define UFS_JORNAL_NUM 32 // 最大日志数量
-#define UFS_BLIST_STACK_MAX 10 // 成组链接法最大长度
 
 #define UFS_BNUM_COMPACT (0) // 块号：兼容块（不使用此块，以便兼容BIOS/UEFI）
 #define UFS_BNUM_SB (1) // 块号：超级块
 #define UFS_BNUM_JORNAL (2) // 块号：日志块
+#define UFS_BNUM_INODE_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：inode开始块
+#define UFS_BNUM_ZONE_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：zone开始块
 #define UFS_BNUM_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：开始块
 
 

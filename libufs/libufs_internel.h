@@ -41,7 +41,7 @@ UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* fd, void* buf, size_t len, int64_t o
 UFS_HIDDEN int ufs_fd_pwrite_check(ufs_fd_t* fd, const void* buf, size_t len, int64_t off);
 /* 拷贝文件描述符的两块区域（区域重叠为UB行为） */
 UFS_HIDDEN int ufs_fd_copy(ufs_fd_t* fd, int64_t off_in, int64_t off_out, size_t len);
-
+UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off);
 
 /**
  * 文件系统日志
@@ -92,20 +92,25 @@ UFS_HIDDEN int ufs_bcache_read(ufs_bcache_t* bcache, void* buf, uint64_t bnum);
 
 
 #define UFS_BLIST_ENTRY_NUM_MAX (UFS_BLOCK_SIZE / 8 - 1)
+#define UFS_BLIST_CACHE_LIST_LIMIT (8)
 typedef struct _blist_item_t {
-    int64_t num; // 剩余块的数量。在磁盘上如果num为负数表示到达链的结尾，否则表示链还有下一项
+    uint64_t next; // 下一个链接的块号（0表示没有）
     uint64_t stack[UFS_BLIST_ENTRY_NUM_MAX];
 
+    // 以下内容保存在内存中
+
     uint64_t bnum;
-    int flag; // 1表示到达链的结尾
+    int num; // 剩余块的数量
 } _blist_item_t;
+
 /**
  * 成组链接法
  * 
  * 磁盘将会以数组链表的形式被组织起来，以避免位视图法对于大存储设备的内存占用过大。
 */
 typedef struct ufs_blist_t {
-    _blist_item_t item[UFS_BLIST_STACK_MAX];
+    _blist_item_t item[UFS_BLIST_CACHE_LIST_LIMIT];
+    uint64_t top_bnum;
     ufs_bcache_t* bcache;
     int n;
     ulatomic_spinlock_t lock;
