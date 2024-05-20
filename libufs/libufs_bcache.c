@@ -88,10 +88,39 @@ do_return:
     return ec;
 }
 static int _bcache_add_jornal(ufs_bcache_t* bcache, const void* buf, uint64_t bnum, int flag) {
-    int ec;
+    int ec, i;
+
+    for(i = 0; i < bcache->jornal_num; ++i)
+        if(ul_unlikely(bcache->jornal_ops[i].bnum == bnum)) {
+            switch(flag) {
+            case UFS_BCACHE_ADD_REF:
+                if(bcache->jornal_flag[i] != UFS_BCACHE_ADD_REF)
+                    ufs_free(ufs_const_cast(void*, bcache->jornal_ops[i].buf));
+                bcache->jornal_ops[i].buf = buf;
+                break;
+            case UFS_BCACHE_ADD_COPY:
+                if(bcache->jornal_flag[i] == UFS_BCACHE_ADD_REF) {
+                    if((bcache->jornal_ops[i].buf = ufs_malloc(UFS_BLOCK_SIZE)) == NULL) return ENOMEM;
+                }
+                memcpy(ufs_const_cast(void*, bcache->jornal_ops[i].buf), buf, UFS_BLOCK_SIZE);
+                break;
+            case UFS_BCACHE_ADD_MOVE:
+                if(bcache->jornal_flag[i] != UFS_BCACHE_ADD_REF)
+                    ufs_free(ufs_const_cast(void*, bcache->jornal_ops[i].buf));
+                bcache->jornal_ops[i].buf = buf;
+                break;
+            }
+            bcache->jornal_flag[i] = flag;
+            return 0;
+        }
+
+
     if(bcache->jornal_num == UFS_JORNAL_NUM) {
         ec = _bcache_sync(bcache);
-        if(ul_unlikely(ec)) goto do_return;
+        if(ul_unlikely(ec)) {
+            if(flag == UFS_BCACHE_ADD_MOVE) ufs_free(ufs_const_cast(void*, buf));
+            return ec;
+        }
     }
     switch(flag) {
     case UFS_BCACHE_ADD_REF:
@@ -99,9 +128,8 @@ static int _bcache_add_jornal(ufs_bcache_t* bcache, const void* buf, uint64_t bn
         break;
     case UFS_BCACHE_ADD_COPY:
         bcache->jornal_ops[bcache->jornal_num].buf = ufs_malloc(UFS_BLOCK_SIZE);
-        if(bcache->jornal_ops[bcache->jornal_num].buf == NULL) {
-            ec = ENOMEM; goto do_return;
-        }
+        if(bcache->jornal_ops[bcache->jornal_num].buf == NULL)
+            return ENOMEM;
         memcpy(ufs_const_cast(void*, bcache->jornal_ops[bcache->jornal_num].buf), buf, UFS_BLOCK_SIZE);
         break;
     case UFS_BCACHE_ADD_MOVE:
@@ -109,15 +137,31 @@ static int _bcache_add_jornal(ufs_bcache_t* bcache, const void* buf, uint64_t bn
         buf = NULL;
         break;
     default:
-        ec = EINVAL; goto do_return;
+        return EINVAL;
     }
     bcache->jornal_flag[bcache->jornal_num] = flag;
     bcache->jornal_ops[bcache->jornal_num].bnum = bnum;
     ++bcache->jornal_num;
-
-do_return:
-    if(ul_unlikely(UFS_BCACHE_ADD_MOVE)) ufs_free(ufs_const_cast(void*, buf));
     return 0;
+}
+
+static int _bcache_read_block(ufs_bcache_t* bcache, void* buf, uint64_t bnum) {
+    for(int i = 0; i < bcache->jornal_num; ++i)
+        if(bcache->jornal_ops[i].bnum == bnum) {
+            memcpy(buf, bcache->jornal_ops[i].buf, UFS_BLOCK_SIZE);
+            return 0;
+        }
+    
+    do {
+        _bcache_node_t* node = ul_reinterpret_cast(_bcache_node_t*,
+            ulrb_find(bcache->nojornal_root, &bnum, _bcache_node_comp, NULL));
+        if(node) {
+            memcpy(buf, node->buf, UFS_BLOCK_SIZE);
+            return 0;
+        }
+    } while(0);
+
+    return ufs_fd_pread_check(bcache->fd, buf, UFS_BLOCK_SIZE, ufs_fd_offset(bnum));
 }
 
 UFS_HIDDEN int ufs_bcache_init(ufs_bcache_t* bcache, ufs_fd_t* fd) {
@@ -139,7 +183,8 @@ UFS_HIDDEN int ufs_bcache_sync(ufs_bcache_t* bcache) {
 UFS_HIDDEN void ufs_bcache_deinit(ufs_bcache_t* bcache) {
     ulmtx_destroy(&bcache->lock);
 }
-UFS_HIDDEN int ufs_bcache_add(ufs_bcache_t* bcache, const void* buf, uint64_t bnum, int flag) {
+
+UFS_HIDDEN int ufs_bcache_add_block(ufs_bcache_t* bcache, const void* buf, uint64_t bnum, int flag) {
     int ec = 0;
     ulmtx_lock(&bcache->lock);
     if(flag & UFS_BCACHE_ADD_JORNAL) {
@@ -150,14 +195,42 @@ UFS_HIDDEN int ufs_bcache_add(ufs_bcache_t* bcache, const void* buf, uint64_t bn
     ulmtx_unlock(&bcache->lock);
     return ec;
 }
+UFS_HIDDEN int ufs_bcache_add(ufs_bcache_t* bcache, const void* buf, uint64_t bnum, size_t off, size_t len, int flag) {
+    int ec = 0;
+    char* tmp;
+    ulmtx_lock(&bcache->lock);
 
-UFS_HIDDEN int ufs_bcache_read(ufs_bcache_t* bcache, void* buf, uint64_t bnum) {
+    tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
+    if(ul_unlikely(tmp == NULL)) { ec = ENOMEM; goto do_return; }
+    ec = _bcache_read_block(bcache, tmp, bnum);
+    memcpy(tmp + off, buf, len);
+
+    if(flag & UFS_BCACHE_ADD_JORNAL) {
+        ec = _bcache_add_jornal(bcache, buf, bnum, flag & 0xF);
+    } else {
+        ec = _bcache_add_nojornal(bcache, buf, bnum, flag & 0xF);
+    }
+
+do_return:
+    ulmtx_unlock(&bcache->lock);
+    return ec;
+
+}
+
+UFS_HIDDEN int ufs_bcache_read_block(ufs_bcache_t* bcache, void* buf, uint64_t bnum) {
+    int ec;
+    ulmtx_lock(&bcache->lock);
+    ec = _bcache_read_block(bcache, buf, bnum);
+    ulmtx_unlock(&bcache->lock);
+    return ec;
+}
+UFS_HIDDEN int ufs_bcache_read(ufs_bcache_t* bcache, void* buf, uint64_t bnum, size_t off, size_t len) {
     int ec = 0;
     ulmtx_lock(&bcache->lock);
     
     for(int i = 0; i < bcache->jornal_num; ++i)
         if(bcache->jornal_ops[i].bnum == bnum) {
-            memcpy(buf, bcache->jornal_ops[i].buf, UFS_BLOCK_SIZE);
+            memcpy(buf, ul_reinterpret_cast(const char*, bcache->jornal_ops[i].buf) + off, len);
             goto do_return;
         }
     
@@ -165,12 +238,12 @@ UFS_HIDDEN int ufs_bcache_read(ufs_bcache_t* bcache, void* buf, uint64_t bnum) {
         _bcache_node_t* node = ul_reinterpret_cast(_bcache_node_t*,
             ulrb_find(bcache->nojornal_root, &bnum, _bcache_node_comp, NULL));
         if(node) {
-            memcpy(buf, node->buf, UFS_BLOCK_SIZE);
+            memcpy(buf, ul_reinterpret_cast(char*, node->buf) + off, len);
             goto do_return;
         }
     }
 
-    ec = ufs_fd_pread_check(bcache->fd, buf, UFS_BLOCK_SIZE, ufs_fd_offset(bnum));
+    ec = ufs_fd_pread_check(bcache->fd, buf, len, ufs_fd_offset2(bnum, off));
 
 do_return:
     ulmtx_unlock(&bcache->lock);

@@ -36,6 +36,7 @@ typedef struct ufs_t ufs_t;
 */
 
 #define ufs_fd_offset(bnum) ul_static_cast(int64_t, (bnum) * UFS_BLOCK_SIZE)
+#define ufs_fd_offset2(bnum, off) ul_static_cast(int64_t, (bnum) * UFS_BLOCK_SIZE + off)
 
 UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* fd, void* buf, size_t len, int64_t off);
 UFS_HIDDEN int ufs_fd_pwrite_check(ufs_fd_t* fd, const void* buf, size_t len, int64_t off);
@@ -58,6 +59,7 @@ typedef struct ufs_jornal_op_t {
 
 UFS_HIDDEN int ufs_jornal_fix(ufs_fd_t* fd, ufs_sb_t* sb);
 UFS_HIDDEN int ufs_jornal_do(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num);
+
 
 
 #include "ulrb.h"
@@ -86,47 +88,89 @@ UFS_HIDDEN void ufs_bcache_deinit(ufs_bcache_t* bcache);
 #define UFS_BCACHE_ADD_MOVE 2 // 转移（自动使用ufs_free销毁）
 
 #define UFS_BCACHE_ADD_JORNAL 0x10 // 使用日志写入
-UFS_HIDDEN int ufs_bcache_add(ufs_bcache_t* bcache, const void* buf, uint64_t bnum, int flag);
+// （不可跨区块，UFS_BCACHE_ADD_REF/UFS_BCACHE_ADD_MOVE将会退化为UFS_BCACHE_ADD_COPY）
+UFS_HIDDEN int ufs_bcache_add(ufs_bcache_t* bcache, const void* buf, uint64_t bnum, size_t off, size_t len, int flag);
+UFS_HIDDEN int ufs_bcache_add_block(ufs_bcache_t* bcache, const void* buf, uint64_t bnum, int flag);
 UFS_HIDDEN int ufs_bcache_sync(ufs_bcache_t* bcache);
-UFS_HIDDEN int ufs_bcache_read(ufs_bcache_t* bcache, void* buf, uint64_t bnum);
+UFS_HIDDEN int ufs_bcache_read_block(ufs_bcache_t* bcache, void* buf, uint64_t bnum);
+// （不可跨区块）
+UFS_HIDDEN int ufs_bcache_read(ufs_bcache_t* bcache, void* buf, uint64_t bnum, size_t off, size_t len);
 
 
-#define UFS_BLIST_ENTRY_NUM_MAX (UFS_BLOCK_SIZE / 8 - 1)
-#define UFS_BLIST_CACHE_LIST_LIMIT (8)
-typedef struct _blist_item_t {
+
+#define UFS_ZLIST_ENTRY_NUM_MAX (UFS_BLOCK_SIZE / 8 - 1)
+#define UFS_ZLIST_CACHE_LIST_LIMIT (8)
+/**
+ * 成组链接法的单项（zone部分）
+ */
+typedef struct _zlist_item_t {
     uint64_t next; // 下一个链接的块号（0表示没有）
-    uint64_t stack[UFS_BLIST_ENTRY_NUM_MAX];
+    uint64_t stack[UFS_ZLIST_ENTRY_NUM_MAX];
 
     // 以下内容保存在内存中
-
-    uint64_t bnum;
+    uint64_t znum;
     int num; // 剩余块的数量
-} _blist_item_t;
+} _zlist_item_t;
 
 /**
- * 成组链接法
- * 
- * 磁盘将会以数组链表的形式被组织起来，以避免位视图法对于大存储设备的内存占用过大。
+ * 成组链接法（zone部分）
 */
-typedef struct ufs_blist_t {
-    _blist_item_t item[UFS_BLIST_CACHE_LIST_LIMIT];
-    uint64_t top_bnum;
+typedef struct ufs_zlist_t {
+    _zlist_item_t item[UFS_ZLIST_CACHE_LIST_LIMIT];
+    uint64_t top_znum;
     ufs_bcache_t* bcache;
     int n;
     ulatomic_spinlock_t lock;
-} ufs_blist_t;
+} ufs_zlist_t;
+UFS_HIDDEN int ufs_zlist_init(ufs_zlist_t* zlist, ufs_bcache_t* bcache, uint64_t start);
+UFS_HIDDEN void ufs_zlist_deinit(ufs_zlist_t* zlist);
+UFS_HIDDEN int ufs_zlist_sync(ufs_zlist_t* zlist);
+UFS_HIDDEN int ufs_zlist_pop(ufs_zlist_t* zlist, uint64_t* pznum);
+UFS_HIDDEN int ufs_zlist_push(ufs_zlist_t* zlist, uint64_t znum);
+UFS_HIDDEN int ufs_calc_zlist_available(uint64_t num);
 
-UFS_HIDDEN int ufs_blist_init(ufs_blist_t* blist, ufs_bcache_t* bcache, uint64_t start);
-UFS_HIDDEN void ufs_blist_deinit(ufs_blist_t* blist);
-UFS_HIDDEN int ufs_blist_sync(ufs_blist_t* blist);
-UFS_HIDDEN int ufs_blist_pop(ufs_blist_t* blist, uint64_t* pbnum);
-UFS_HIDDEN int ufs_blist_push(ufs_blist_t* blist, uint64_t bnum);
+
+
+#define UFS_ILIST_ENTRY_NUM_MAX (UFS_BLOCK_SIZE / UFS_INODE_PER_BLOCK / 8 - 1)
+#define UFS_ILIST_CACHE_LIST_LIMIT (32)
+/**
+ * 成组链接法的单项（inode部分）
+ * 
+ * 由于一个块可以存放多个inode，因此我们单独实现了inode和zone的成组链接法。
+ */
+typedef struct _ilist_item_t {
+    uint64_t next; // 下一个链接的块号（0表示没有）
+    uint64_t stack[UFS_ILIST_ENTRY_NUM_MAX];
+
+    // 以下内容保存在内存中
+    uint64_t inum;
+    int num; // 剩余块的数量
+} _ilist_item_t;
+
+/**
+ * 成组链接法（inode部分）
+*/
+typedef struct ufs_ilist_t {
+    _ilist_item_t item[UFS_ILIST_CACHE_LIST_LIMIT];
+    uint64_t top_inum;
+    ufs_bcache_t* bcache;
+    int n;
+    ulatomic_spinlock_t lock;
+} ufs_ilist_t;
+UFS_HIDDEN int ufs_ilist_init(ufs_ilist_t* ilist, ufs_bcache_t* bcache, uint64_t start);
+UFS_HIDDEN void ufs_ilist_deinit(ufs_ilist_t* ilist);
+UFS_HIDDEN int ufs_ilist_sync(ufs_ilist_t* ilist);
+UFS_HIDDEN int ufs_ilist_pop(ufs_ilist_t* ilist, uint64_t* pinum);
+UFS_HIDDEN int ufs_ilist_push(ufs_ilist_t* ilist, uint64_t inum);
+UFS_HIDDEN int ufs_calc_ilist_available(uint64_t num);
+
 
 
 
 struct ufs_t {
     ufs_sb_t sb;
     ufs_fd_t* fd;
+    ufs_bcache_t bcache;
 };
 
 

@@ -125,7 +125,7 @@ typedef struct ufs_sb_t {
 } ufs_sb_t;
 extern int UFS_S[sizeof(ufs_sb_t)];
 
-typedef struct myfs_inode_t {
+typedef struct ufs_inode_t {
     uint32_t nlink; // 链接数
     uint16_t mode; // 模式
     uint16_t _d2;
@@ -159,11 +159,16 @@ typedef struct myfs_inode_t {
     */
     uint64_t zones[16];
 
+
     uint64_t _d[9];
-} myfs_inode_t;
-#define MYFS_INODE_SIZE_LOG2 8
-#define MYFS_INODE_SIZE 256
-#define MYFS_INODE_PER_BLOCK (1024 / sizeof(myfs_inode_t))
+} ufs_inode_t;
+#define UFS_INODE_DISK_SIZE (256)
+#define UFS_INODE_PER_BLOCK (UFS_BLOCK_SIZE / UFS_INODE_DISK_SIZE)
+
+
+struct ufs_minode_t;
+typedef struct ufs_minode_t ufs_minode_t;
+
 
 struct ufs_t;
 typedef struct ufs_t ufs_t;

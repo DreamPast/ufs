@@ -16,7 +16,9 @@ add_library(
 	libufs_fd.c
 	libufs_jornal.c
 	libufs_bcache.c
-	libufs_blist.c
+	libufs_zlist.c
+	libufs_ilist.c
+	libufs_inode.c
 )
 include_directories(libul/)
 
