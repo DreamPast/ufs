@@ -40,7 +40,7 @@ extern "C" {
 // 错误：无法读入足够的字节（这通常是因为遇到了EOF，但是我们的磁盘文件是对齐BLOCK_SIZE的，这个不应当发生）
 #define UFS_ERROR_READ_NOT_ENOUGH -2
 // 错误：磁盘已损坏（这通常是因为磁盘文件被外部程序进行了不正确的修改）
-#define UFS_ERROR_BROKEN_DISK -2
+#define UFS_ERROR_BROKEN_DISK -3
 
 // 获得error对应的解释字符串，对于Unix style的error code，这将直接使用系统的错误信息
 UFS_API const char* ufs_strerror(int error);
@@ -70,6 +70,12 @@ typedef struct ufs_fd_t {
 UFS_API int ufs_fd_open_file(ufs_fd_t** pfd, const char* path);
 UFS_API int ufs_fd_is_file(ufs_fd_t* fd);
 
+UFS_API int ufs_fd_open_memory(ufs_fd_t** pfd, const void* src, size_t len);
+UFS_API int ufs_fd_is_memory(ufs_fd_t* fd);
+UFS_API int ufs_fd_lock_memory(ufs_fd_t* fd);
+UFS_API int ufs_fd_unlock_memory(ufs_fd_t* fd);
+UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
+
 
 /**
  * 配置
@@ -77,13 +83,12 @@ UFS_API int ufs_fd_is_file(ufs_fd_t* fd);
 
 
 #define UFS_USE_UNIFORM_ERROR_CODE 1 // 使用统一的Unix style错误代码（默认使用）
-#define UFS_ENABLE_THREAD_SAFE 1 // 开启多线程安全
 
 #define UFS_MAGIC1 (67) // 魔数1
 #define UFS_MAGIC2 (74) // 魔数2
 
 #define UFS_NAME_MAX (64-1) // 目录最大名称长度（建议为2的指数-1）
-#define UFS_BLOCK_SIZE (4096) // 块的大小（必须是2的指数）
+#define UFS_BLOCK_SIZE (1024) // 块的大小（必须是2的指数）
 #define UFS_INODE_DEFAULT_RATIO (16*1024) // inode的默认比值（每16KB添加一个inode）
 
 #define UFS_JORNAL_NUM 32 // 最大日志数量
@@ -97,7 +102,7 @@ UFS_API int ufs_fd_is_file(ufs_fd_t* fd);
 
 typedef struct ufs_sb_t {
     uint8_t magic[2]; // 魔数
-    uint8_t ext_offset; // 扩展标记（仅作向后兼容，当前版本为0）
+    uint8_t jornal_num; // 最大日志数量
 
 #define UFS_JORNAL_OFFSET offsetof(ufs_sb_t, jornal_start0)
     uint8_t jornal_start0; // 日志起始标记0
@@ -106,16 +111,18 @@ typedef struct ufs_sb_t {
     uint8_t jornal_last1; // 日志终止标记1
     uint8_t jornal_last0; // 日志终止标记0
     uint8_t block_size_log2; // 块的大小（2的指数）
-    uint8_t _jd2;
+    uint8_t ext_offset; // 扩展标记（仅作向后兼容，当前版本为0）
     uint32_t _jd3;
 
     uint64_t inode_blocks; // inode块数
     uint64_t zone_blocks; // zone块数
+    uint64_t inode_max_blocks; // 最大inode块数
+    uint64_t zone_max_blocks; // 最大zone块数
 
     uint64_t inode_start;
     uint64_t zone_start;
 } ufs_sb_t;
-int s[sizeof(ufs_sb_t)];
+extern int UFS_S[sizeof(ufs_sb_t)];
 
 typedef struct myfs_inode_t {
     uint32_t nlink; // 链接数

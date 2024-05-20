@@ -166,9 +166,9 @@ Red-Black Tree (fast but restricted version)
  * } mynode_t;
  *
  * int mynode_comp(void* opaque, const void* lp, const void* rp) {
- *   (void)opaque;
  *   const char* lhs = *(const char**)lp;
  *   const char* rhs = *(const char**)rp;
+ *   (void)opaque;
  *   return strcmp(lhs, rhs);
  * }
  * ```

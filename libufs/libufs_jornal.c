@@ -41,7 +41,7 @@ static int _remove_flag2(ufs_fd_t* fd) {
     return 0;
 }
 
-static int _do_jornal(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
+UFS_HIDDEN int ufs_jornal_do(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
     int ec;
     int i;
     _sb_jornal_t disk;
@@ -67,7 +67,7 @@ static int _do_jornal(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
     if(ul_unlikely(ec)) return ec;
 
     // 3. 写入区块
-    for(i = 0; i < UFS_JORNAL_NUM; ++i) {
+    for(i = 0; i < num; ++i) {
         ec = ufs_fd_pwrite_check(fd, ops[i].buf, UFS_BLOCK_SIZE, ufs_fd_offset(ops[i].bnum));
         if(ul_unlikely(ec)) return ec;
     }
@@ -85,7 +85,7 @@ static int _do_jornal(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
     return 0;
 }
 
-static int _fix_jornal(ufs_fd_t* fd, const ufs_sb_t* sb) {
+UFS_HIDDEN int ufs_jornal_fix(ufs_fd_t* fd, ufs_sb_t* sb) {
     int ec;
     int i;
     _sb_jornal_t disk;
@@ -136,37 +136,4 @@ static int _fix_jornal(ufs_fd_t* fd, const ufs_sb_t* sb) {
         return UFS_ERROR_BROKEN_DISK;
     }
     return UFS_ERROR_BROKEN_DISK;
-}
-
-UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* jornal) {
-    return ulmtx_init(&jornal->mtx);
-}
-UFS_HIDDEN void ufs_jornal_deinit(ufs_jornal_t* jornal) {
-    ulmtx_destroy(&jornal->mtx);
-}
-UFS_HIDDEN int ufs_jornal_fix(ufs_jornal_t* jornal, ufs_fd_t* fd, const ufs_sb_t* sb) {
-    int ec;
-    ec = ulmtx_lock(&jornal->mtx);
-    if(ul_unlikely(ec)) return ec;
-    ec = _fix_jornal(fd, sb);
-    if(ul_likely(!ec)) memset(ul_reinterpret_cast(char*, sb) + UFS_JORNAL_OFFSET, 0, _sb_jornal_size);
-    ulmtx_unlock(&jornal->mtx);
-    return ec;
-}
-UFS_HIDDEN int ufs_jornal_do(
-    ufs_jornal_t* jornal, ufs_fd_t* fd, int wait,
-    ufs_jornal_op_t* ops, int n
-) {
-    int ec;
-    if(wait) {
-        ec = ulmtx_lock(&jornal->mtx);
-        if(ul_unlikely(ec)) return ec;
-    } else {
-        ec = ulmtx_trylock(&jornal->mtx);
-        if(ul_unlikely(ec)) return ec;
-    }
-
-    ec = _do_jornal(fd, ops, n);
-    ulmtx_unlock(&jornal->mtx);
-    return ec;
 }

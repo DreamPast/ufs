@@ -1,7 +1,7 @@
 #ifndef LIBUFS_THREAD_H
 #define LIBUFS_THREAD_H
 
-#if (UFS_ENABLE_THREAD_SAFE+0)
+#ifdef LIBUFS_NO_THREAD_SAFE
     #define ULATOMIC_SINGLE_THREAD
     #define ULATOMIC_NEEDED
 
@@ -23,9 +23,10 @@
 
 #ifndef ul_const_cast
     #ifdef __cplusplus
-        #define ul_const_cast(T, val) const_cast<T>(val)
+        #define ufs_const_cast(T, val) const_cast<T>(val)
     #else
-        #define ul_const_cast(T, val) ((T)(val))
+        // C语言在高警告等级下const的移除会导致警告，我们需要将其转化为地址再转回指针
+        #define ufs_const_cast(T, val) ((T)((intptr_t)(val)))
     #endif
 #endif
 
