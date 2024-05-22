@@ -20,7 +20,7 @@ add_library(
 	libufs_ilist.c
 	libufs_inode.c
 )
-include_directories(libul/)
+include_directories(../libul/)
 
 if(LIBUFS_NO_THREAD_SAFE)
 	add_compile_definitions(LIBUFS_NO_THREAD_SAFE)

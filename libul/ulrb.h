@@ -188,9 +188,9 @@ Red-Black Tree (fast but restricted version)
  *   Node& operator=(Node&&) = default;
  *
  *   static int comp(void* opaque, const void* lp, const void* rp) {
- *     (void)opaque;
  *     auto lhs = *reinterpret_cast<const Key*>(lp);
  *     auto rhs = *reinterpret_cast<const Key*>(rp);
+ *     (void)opaque;
  *     if(lhs < rhs) return -1;
  *     else return lhs > rhs;
  *   }
