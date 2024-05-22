@@ -41,7 +41,7 @@ static int _remove_flag2(ufs_fd_t* fd) {
     return 0;
 }
 
-UFS_HIDDEN int ufs_jornal_do(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* ufs_restrict ops, int num) {
+UFS_HIDDEN int ufs_do_jornal(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* ufs_restrict ops, int num) {
     int ec;
     int i;
     _sb_jornal_t disk;
@@ -85,7 +85,7 @@ UFS_HIDDEN int ufs_jornal_do(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* u
     return 0;
 }
 
-UFS_HIDDEN int ufs_jornal_fix(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict sb) {
+UFS_HIDDEN int ufs_fix_jornal(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict sb) {
     int ec;
     int i;
     _sb_jornal_t disk;
@@ -136,4 +136,163 @@ UFS_HIDDEN int ufs_jornal_fix(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict 
         return UFS_ERROR_BROKEN_DISK;
     }
     return UFS_ERROR_BROKEN_DISK;
+}
+
+UFS_HIDDEN int ufs_jmanager_init(ufs_jmanager_t* ufs_restrict jmanager, ufs_fd_t* ufs_restrict fd) {
+    jmanager->fd = fd;
+    jmanager->num = 0;
+    ulatomic_spinlock_init(&jmanager->lock);
+    return 0;
+}
+UFS_HIDDEN void ufs_jmanager_deinit(ufs_jmanager_t* jmanager) {
+    (void)jmanager;
+}
+
+UFS_HIDDEN int ufs_jmanager_sync_nolock(ufs_jmanager_t* jmanager) {
+    int ec, i;
+    ec = ufs_do_jornal(jmanager->fd, jmanager->ops, jmanager->num);
+    if(ul_unlikely(ec)) return ec;
+    for(i = jmanager->num - 1; i >= 0; --i)
+        if(jmanager->flag[i] & _UFS_JORNAL_ADD_ALLOC) {
+            ufs_free(ufs_const_cast(void*, jmanager->ops[i].buf));
+        }
+    jmanager->num = 0;
+    return 0;
+}
+UFS_HIDDEN int ufs_jmanager_read_block_nolock(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum) {
+    int i;
+    for(i = jmanager->num - 1; i >= 0; --i)
+        if(jmanager->ops[i].bnum == bnum) {
+            memcpy(buf, jmanager->ops[i].buf, UFS_BLOCK_SIZE);
+            return 0;
+        }
+    return ufs_fd_pread_check(jmanager->fd, buf, UFS_BLOCK_SIZE, ufs_fd_offset(bnum));
+}
+UFS_HIDDEN int ufs_jmanager_read_nolock(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
+    int i;
+    for(i = jmanager->num - 1; i >= 0; --i)
+        if(jmanager->ops[i].bnum == bnum) {
+            memcpy(buf, ul_reinterpret_cast(const char*, jmanager->ops[i].buf) + off, len);
+            return 0;
+        }
+    return ufs_fd_pread_check(jmanager->fd, buf, len, ufs_fd_offset2(bnum, off));
+}
+
+UFS_HIDDEN int ufs_jmanager_read_block(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum) {
+    int ec;
+    ufs_jmanager_lock(jmanager);
+    ec = ufs_jmanager_read_block_nolock(jmanager, buf, bnum);
+    ufs_jmanager_unlock(jmanager);
+    return ec;
+}
+UFS_HIDDEN int ufs_jmanager_read(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
+    int ec;
+    ufs_jmanager_lock(jmanager);
+    ec = ufs_jmanager_read_nolock(jmanager, buf, bnum, off, len);
+    ufs_jmanager_unlock(jmanager);
+    return ec;
+}
+UFS_HIDDEN int ufs_jmanager_sync(ufs_jmanager_t* jmanager) {
+    int ec;
+    ufs_jmanager_lock(jmanager);
+    ec = ufs_jmanager_sync_nolock(jmanager);
+    ufs_jmanager_unlock(jmanager);
+    return ec;
+}
+
+
+UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_jmanager_t* ufs_restrict jmanager) {
+    jornal->jmanager = jmanager;
+    jornal->num = 0;
+    return 0;
+}
+UFS_HIDDEN void ufs_jornal_deinit(ufs_jornal_t* jornal) {
+    (void)jornal;
+}
+UFS_HIDDEN int ufs_jornal_add(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag) {
+    int ec;
+    char* tmp;
+    tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
+    if(ul_unlikely(tmp == NULL)) { ec = ENOMEM; goto do_return; }
+    ec = ufs_jornal_read_block(jornal, tmp, bnum);
+    if(ul_unlikely(ec)) { ufs_free(tmp); goto do_return; }
+    memcpy(tmp + off, buf, len);
+    ec = ufs_jornal_add_block(jornal, tmp, bnum, UFS_JORNAL_ADD_MOVE);
+do_return:
+    if(flag == UFS_JORNAL_ADD_REF) ufs_free(ufs_const_cast(void*, buf));
+    return ec;
+}
+UFS_HIDDEN int ufs_jornal_add_block(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, int flag) {
+    if(ul_unlikely(jornal->num == UFS_JORNAL_NUM)) {
+        if(flag == UFS_JORNAL_ADD_REF) ufs_free(ufs_const_cast(void*, buf));
+        return ERANGE;
+    }
+    switch(flag) {
+    case UFS_JORNAL_ADD_REF:
+        jornal->ops[jornal->num].buf = buf;
+        break;
+    case UFS_JORNAL_ADD_COPY:
+        jornal->ops[jornal->num].buf = ufs_malloc(UFS_BLOCK_SIZE);
+        if(ul_unlikely(jornal->ops[jornal->num].buf == NULL)) return ENOMEM;
+        memcpy(ufs_const_cast(void*, jornal->ops[jornal->num].buf), buf, UFS_BLOCK_SIZE);
+        break;
+    case UFS_JORNAL_ADD_MOVE:
+        jornal->ops[jornal->num].buf = buf;
+        buf = NULL;
+        break;
+    default:
+        return EINVAL;
+    }
+    jornal->flag[jornal->num] = flag & 3;
+    jornal->ops[jornal->num].bnum = bnum;
+    ++jornal->num;
+    return 0;
+}
+UFS_HIDDEN int ufs_jornal_add_zero_block(ufs_jornal_t* jornal, uint64_t bnum) {
+    char* tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
+    if(ul_unlikely(tmp)) return ENOMEM;
+    memset(tmp, 0, UFS_BLOCK_SIZE);
+    return ufs_jornal_add_block(jornal, tmp, bnum, UFS_JORNAL_ADD_MOVE);
+}
+UFS_HIDDEN int ufs_jornal_add_zero(ufs_jornal_t* jornal, uint64_t bnum, size_t off, size_t len) {
+    int ec;
+    char* tmp;
+    tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
+    if(ul_unlikely(tmp == NULL)) return ENOMEM;
+    ec = ufs_jornal_read_block(jornal, tmp, bnum);
+    if(ul_unlikely(ec)) { ufs_free(tmp); return ec; }
+    memset(tmp + off, 0, len);
+    return ufs_jornal_add_block(jornal, tmp, bnum, UFS_JORNAL_ADD_MOVE);
+}
+UFS_HIDDEN int ufs_jornal_read_block(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum) {
+    return ufs_jmanager_read_block(jornal->jmanager, buf, bnum);
+}
+UFS_HIDDEN int ufs_jornal_read(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
+    return ufs_jmanager_read(jornal->jmanager, buf, bnum, off, len);
+}
+UFS_HIDDEN int ufs_jornal_commit(ufs_jornal_t* jornal, int num) {
+    int ec = 0;
+    ufs_jmanager_lock(jornal->jmanager);
+    if(jornal->jmanager->num + num > UFS_JORNAL_NUM) {
+        ec = ufs_jmanager_sync_nolock(jornal->jmanager);
+        if(ul_unlikely(ec)) goto do_return;
+    }
+    memcpy(jornal->jmanager->ops + jornal->jmanager->num, jornal->ops, ul_static_cast(size_t, jornal->num) * sizeof(jornal->ops[0]));
+    memcpy(jornal->jmanager->flag + jornal->jmanager->num, jornal->flag, ul_static_cast(size_t, jornal->num) * sizeof(jornal->flag[0]));
+    jornal->jmanager->num += jornal->num;
+do_return:
+    ufs_jmanager_unlock(jornal->jmanager);
+    return ec;
+}
+UFS_HIDDEN int ufs_jornal_commit_all(ufs_jornal_t* jornal) {
+    return ufs_jornal_commit(jornal, jornal->num);
+}
+UFS_HIDDEN void ufs_jornal_settop(ufs_jornal_t* jornal, int top) {
+    int i;
+    ufs_assert(top < jornal->num);
+    for(i = top; i < jornal->num; ++i)
+        if(jornal->flag[i] & _UFS_JORNAL_ADD_ALLOC) {
+            ufs_free(ufs_const_cast(void*, jornal->ops[i].buf));
+        }
+    jornal->num = top;
 }

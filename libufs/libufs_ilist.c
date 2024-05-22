@@ -18,10 +18,10 @@ static _ilist_item_t* _todisk_alloc(const _ilist_item_t* item) {
     return ret;
 }
 
-static int _read_ilist(_ilist_item_t* ufs_restrict item, ufs_bcache_t* ufs_restrict bcache, uint64_t inum) {
+static int _read_ilist(_ilist_item_t* ufs_restrict item, ufs_jornal_t* ufs_restrict jornal, uint64_t inum) {
     int ec;
     int num = 0;
-    ec = ufs_bcache_read(bcache, item, inum / UFS_INODE_PER_BLOCK,
+    ec = ufs_jornal_read(jornal, item, inum / UFS_INODE_PER_BLOCK,
         (inum % UFS_INODE_PER_BLOCK) * UFS_INODE_DISK_SIZE, UFS_INODE_DISK_SIZE);
     if(ul_unlikely(ec)) return ec;
     if(ul_unlikely(inum == 0)) return UFS_ERROR_BROKEN_DISK;
@@ -32,11 +32,11 @@ static int _read_ilist(_ilist_item_t* ufs_restrict item, ufs_bcache_t* ufs_restr
     item->inum = inum;
     return 0;
 }
-static int _write_ilist(const _ilist_item_t* ufs_restrict item, ufs_bcache_t* ufs_restrict bcache, uint64_t inum) {
+static int _write_ilist(const _ilist_item_t* ufs_restrict item, ufs_jornal_t* ufs_restrict jornal, uint64_t inum) {
     _ilist_item_t* ret;
     ret = _todisk_alloc(item);
     if(ul_unlikely(ret == NULL)) return ENOMEM;
-    return ufs_bcache_add(bcache, ret, inum / UFS_INODE_PER_BLOCK, UFS_BCACHE_ADD_MOVE,
+    return ufs_jornal_add(jornal, ret, inum / UFS_INODE_PER_BLOCK, UFS_JORNAL_ADD_MOVE,
         (inum % UFS_INODE_PER_BLOCK) * UFS_INODE_DISK_SIZE, UFS_INODE_DISK_SIZE);
 }
 
@@ -46,7 +46,7 @@ static int _rewind_ilist(ufs_ilist_t* ilist, uint64_t inum) {
 
     n = 0;
     while(inum && n < UFS_ILIST_CACHE_LIST_LIMIT / 2) {
-        ec = _read_ilist(ilist->item + n, ilist->bcache, inum);
+        ec = _read_ilist(ilist->item + n, ilist->jornal, inum);
         if(ul_unlikely(ec)) return ec;
         inum = ilist->item[n].next;
         ++n;
@@ -66,15 +66,14 @@ static int _rewind_ilist(ufs_ilist_t* ilist, uint64_t inum) {
 static int _write_multi_ilist(const ufs_ilist_t* ilist, int i, int n) {
     int ec;
     while(i < n) {
-        ec = _write_ilist(ilist->item + i, ilist->bcache, ilist->item[i].inum);
+        ec = _write_ilist(ilist->item + i, ilist->jornal, ilist->item[i].inum);
         if(ul_unlikely(ec)) return ec;
     }
     return 0;
 }
 
-UFS_HIDDEN int ufs_ilist_init(ufs_ilist_t* ufs_restrict ilist, ufs_bcache_t* ufs_restrict bcache, uint64_t start) {
+UFS_HIDDEN int ufs_ilist_init(ufs_ilist_t* ufs_restrict ilist, uint64_t start) {
     int ec;
-    ilist->bcache = bcache;
     ilist->top_inum = start;
     ec = _rewind_ilist(ilist, start);
     if(ul_unlikely(ec)) return ec;
@@ -89,15 +88,15 @@ UFS_HIDDEN void ufs_ilist_deinit(ufs_ilist_t* ilist) {
     (void)ilist;
 }
 
-UFS_HIDDEN int ufs_ilist_sync_nolock(ufs_ilist_t* ilist) {
+UFS_HIDDEN int ufs_ilist_sync(ufs_ilist_t* ilist) {
     int ec;
 
     ufs_assert(ilist->n > 0);
     ec = _write_multi_ilist(ilist, 0, ilist->n - 1);
     if(ul_unlikely(ec)) return ec;
-    return _write_ilist(ilist->item + ilist->n - 1, ilist->bcache, ilist->top_inum);
+    return _write_ilist(ilist->item + ilist->n - 1, ilist->jornal, ilist->top_inum);
 }
-UFS_HIDDEN int ufs_ilist_pop_nolock(ufs_ilist_t* ufs_restrict ilist, uint64_t* ufs_restrict pinum) {
+UFS_HIDDEN int ufs_ilist_pop(ufs_ilist_t* ufs_restrict ilist, uint64_t* ufs_restrict pinum) {
     int ec;
     int n = ilist->n;
 
@@ -118,7 +117,7 @@ UFS_HIDDEN int ufs_ilist_pop_nolock(ufs_ilist_t* ufs_restrict ilist, uint64_t* u
     ec = _rewind_ilist(ilist, *pinum);
     return ec;
 }
-UFS_HIDDEN int ufs_ilist_push_nolock(ufs_ilist_t* ilist, uint64_t inum) {
+UFS_HIDDEN int ufs_ilist_push(ufs_ilist_t* ilist, uint64_t inum) {
     int ec;
     int n = ilist->n;
 
@@ -138,30 +137,4 @@ UFS_HIDDEN int ufs_ilist_push_nolock(ufs_ilist_t* ilist, uint64_t inum) {
     ilist->item[n].num = 0;
     ilist->n = ++n;
     return 0;
-}
-
-UFS_HIDDEN int ufs_ilist_sync(ufs_ilist_t* ilist) {
-    int ec;
-    ulatomic_spinlock_lock(&ilist->lock);
-    ec = ufs_ilist_sync_nolock(ilist);
-    ulatomic_spinlock_unlock(&ilist->lock);
-    return ec;
-}
-UFS_HIDDEN int ufs_ilist_pop(ufs_ilist_t* ilist, uint64_t* pinum) {
-    int ec;
-    ulatomic_spinlock_lock(&ilist->lock);
-    ec = ufs_ilist_pop_nolock(ilist, pinum);
-    ulatomic_spinlock_unlock(&ilist->lock);
-    return ec;
-}
-UFS_HIDDEN int ufs_ilist_push(ufs_ilist_t* ilist, uint64_t inum) {
-    int ec;
-    ulatomic_spinlock_lock(&ilist->lock);
-    ec = ufs_ilist_push_nolock(ilist, inum);
-    ulatomic_spinlock_unlock(&ilist->lock);
-    return ec;
-}
-UFS_HIDDEN uint64_t ufs_calc_ilist_available(uint64_t num) {
-    if(ul_unlikely(num == 0)) return 0;
-    return num - (num - 1) / ul_static_cast(uint64_t, UFS_ILIST_ENTRY_NUM_MAX);
 }

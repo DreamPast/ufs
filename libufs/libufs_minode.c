@@ -16,12 +16,12 @@ static void _trans_inode(ufs_inode_t* dest, const ufs_inode_t* src) {
 // 从inum中读取inode信息
 static int _read_inode(ufs_t* ufs, ufs_inode_t* inode, uint64_t inum) {
     int ec;
-    ec = ufs_bcache_read(&ufs->bcache, inode, inum / UFS_INODE_PER_BLOCK,
+    ec = ufs_jmanager_read(&ufs->jmanager, inode, inum / UFS_INODE_PER_BLOCK,
         (inum % UFS_INODE_PER_BLOCK) * UFS_INODE_DISK_SIZE, UFS_INODE_MEMORY_SIZE);
     if(ul_unlikely(ec)) goto do_return;
 
     _trans_inode(inode, inode);
-    
+
 do_return:
     return ec;
 }
@@ -43,7 +43,7 @@ static int _seek_inode(ufs_minode_t* inode, uint64_t block, uint64_t* pznum) {
             block -= UFS_ZNUM_PER_BLOCK;
         }
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_bcache_read(&inode->ufs->bcache, &bnum, bnum, block * 8, sizeof(bnum));
+        ec = ufs_jmanager_read(&inode->ufs->jmanager, &bnum, bnum, block * 8, sizeof(bnum));
         if(ul_unlikely(ec)) return ec;
         *pznum = ul_trans_u64_le(bnum);
         return 0;
@@ -54,12 +54,12 @@ static int _seek_inode(ufs_minode_t* inode, uint64_t block, uint64_t* pznum) {
         uint64_t bnum = inode->inode.zones[14];
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_bcache_read(&inode->ufs->bcache, &bnum, bnum, (block / UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
+        ec = ufs_jmanager_read(&inode->ufs->jmanager, &bnum, bnum, (block / UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
         if(ul_unlikely(ec)) return ec;
         bnum = ul_trans_u64_le(bnum);
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_bcache_read(&inode->ufs->bcache, &bnum, bnum, (block % UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
+        ec = ufs_jmanager_read(&inode->ufs->jmanager, &bnum, bnum, (block % UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
         if(ul_unlikely(ec)) return ec;
         bnum = ul_trans_u64_le(bnum);
 
@@ -72,18 +72,18 @@ static int _seek_inode(ufs_minode_t* inode, uint64_t block, uint64_t* pznum) {
         uint64_t bnum = inode->inode.zones[15];
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_bcache_read(&inode->ufs->bcache, &bnum, bnum, (block / (UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK)) * 8, sizeof(bnum));
+        ec = ufs_jmanager_read(&inode->ufs->jmanager, &bnum, bnum, (block / (UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK)) * 8, sizeof(bnum));
         if(ul_unlikely(ec)) return ec;
         block %= UFS_ZNUM_PER_BLOCK;
         bnum = ul_trans_u64_le(bnum);
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_bcache_read(&inode->ufs->bcache, &bnum, bnum, (block / UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
+        ec = ufs_jmanager_read(&inode->ufs->jmanager, &bnum, bnum, (block / UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
         if(ul_unlikely(ec)) return ec;
         bnum = ul_trans_u64_le(bnum);
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_bcache_read(&inode->ufs->bcache, &bnum, bnum, (block % UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
+        ec = ufs_jmanager_read(&inode->ufs->jmanager, &bnum, bnum, (block % UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
         if(ul_unlikely(ec)) return ec;
         bnum = ul_trans_u64_le(bnum);
 
@@ -93,3 +93,20 @@ static int _seek_inode(ufs_minode_t* inode, uint64_t block, uint64_t* pznum) {
 
     return ERANGE;
 }
+
+UFS_HIDDEN int ufs_minode_init(ufs_t* ufs, ufs_minode_t* inode, uint64_t inum) {
+    int ec;
+
+    ec = _read_inode(ufs, &inode->inode, inum);
+    if(ul_unlikely(ec)) return ec;
+
+    inode->ufs = ufs;
+    return 0;
+}
+UFS_HIDDEN int ufs_minode_destroy(ufs_minode_t* inode);
+UFS_HIDDEN int ufs_minode_pread(ufs_minode_t* inode, void* buf, size_t len, int64_t off);
+UFS_HIDDEN int ufs_minode_pwrite(ufs_minode_t* inode, const void* buf, size_t len, int64_t off);
+UFS_HIDDEN int ufs_minode_sync(ufs_minode_t* inode);
+
+// 预分配块，成功则保证之后的写入绝不会因为磁盘空间不够而失败
+UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block);

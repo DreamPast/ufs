@@ -15,7 +15,6 @@ add_library(
 	libufs_thread.c
 	libufs_fd.c
 	libufs_jornal.c
-	libufs_bcache.c
 	libufs_zlist.c
 	libufs_ilist.c
 	libufs_minode.c
