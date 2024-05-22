@@ -1,7 +1,7 @@
 #include "libufs_internel.h"
 #include "ulfd.h"
 
-UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* fd, void* buf, size_t len, int64_t off) {
+UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* ufs_restrict fd, void* ufs_restrict buf, size_t len, int64_t off) {
     char* _buf = ul_reinterpret_cast(char*, buf);
     size_t read;
     int ec = 0;
@@ -19,7 +19,7 @@ UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* fd, void* buf, size_t len, int64_t o
     }
     return 0;
 }
-UFS_HIDDEN int ufs_fd_pwrite_check(ufs_fd_t* fd, const void* buf, size_t len, int64_t off) {
+UFS_HIDDEN int ufs_fd_pwrite_check(ufs_fd_t* ufs_restrict fd, const void* ufs_restrict buf, size_t len, int64_t off) {
     const char* _buf = ul_reinterpret_cast(const char*, buf);
     size_t writen;
     int ec = 0;
@@ -58,7 +58,7 @@ UFS_HIDDEN int ufs_fd_copy(ufs_fd_t* fd, int64_t off_in, int64_t off_out, size_t
                 else break;
             }
         }
-        
+
         for(;;) {
             ec = fd->pwrite(fd, cache, nread, off_out, &nwrite);
             if(ec) {
@@ -94,7 +94,7 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         ufs_fd_t b;
         ulfd_t fd;
     #if defined(ULFD_NO_PREAD) || defined(ULFD_NO_PWRITE)
-        ulatomic_spinlock_t lck;
+        ulatomic_spinlock_t lock;
     #endif
     } _fd_file_t;
     static const char _fd_file_type[] = "FILE";
@@ -108,14 +108,14 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
     static int _fd_file_pread(ufs_fd_t* fd, void* buf, size_t len, int64_t off, size_t* pread) {
         _fd_file_t* _fd = ul_reinterpret_cast(_fd_file_t*, fd);
     #if defined(ULFD_NO_PREAD) || defined(ULFD_NO_PWRITE)
-        ulatomic_spinlock_lock(&_fd->lck);
+        ulatomic_spinlock_lock(&_fd->lock);
         do {
             ulfd_int64_t off;
             int err = ulfd_seek(_fd->fd, off, ULFD_SEEK_SET, &off);
             if(ul_unlikely(err)) return err;
             return ulfd_read(_fd->fd, buf, len, pread);
         } while(0);
-        ulatomic_spinlock_unlock(&_fd->lck);
+        ulatomic_spinlock_unlock(&_fd->lock);
     #else
         return ulfd_pread(_fd->fd, buf, len, off, pread);
     #endif
@@ -123,14 +123,14 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
     static int _fd_file_pwrite(ufs_fd_t* fd, const void* buf, size_t len, int64_t off, size_t* pwriten) {
         _fd_file_t* _fd = ul_reinterpret_cast(_fd_file_t*, fd);
     #if defined(ULFD_NO_PREAD) || defined(ULFD_NO_PWRITE)
-        ulatomic_spinlock_lock(&_fd->lck);
+        ulatomic_spinlock_lock(&_fd->lock);
         do {
             ulfd_int64_t off;
             int err = ulfd_seek(_fd->fd, off, ULFD_SEEK_SET, &off);
             if(ul_unlikely(err)) return err;
             return ulfd_write(_fd->fd, buf, len, pwriten);
         } while(0);
-        ulatomic_spinlock_unlock(&_fd->lck);
+        ulatomic_spinlock_unlock(&_fd->lock);
     #else
         return ulfd_pwrite(_fd->fd, buf, len, off, pwriten);
     #endif
@@ -168,10 +168,10 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         fd->b.pread = &_fd_file_pread;
         fd->b.pwrite = &_fd_file_pwrite;
         fd->b.sync = &_fd_file_sync;
-        
+
         *pfd = ul_reinterpret_cast(ufs_fd_t*, fd);
     #if defined(ULFD_NO_PREAD) || defined(ULFD_NO_PWRITE)
-        fd->lck = 0;
+        ulatomic_spinlock_init(&fd->lock);
     #endif
         return 0;
     }
@@ -259,7 +259,7 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         fd->b.pread = _fd_memory_pread;
         fd->b.pwrite = _fd_memory_pwrite;
         fd->b.sync = _fd_memory_sync;
-        
+
         *pfd = ul_reinterpret_cast(ufs_fd_t*, fd);
         return 0;
     }

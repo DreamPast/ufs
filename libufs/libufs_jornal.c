@@ -41,7 +41,7 @@ static int _remove_flag2(ufs_fd_t* fd) {
     return 0;
 }
 
-UFS_HIDDEN int ufs_jornal_do(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) {
+UFS_HIDDEN int ufs_jornal_do(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* ufs_restrict ops, int num) {
     int ec;
     int i;
     _sb_jornal_t disk;
@@ -85,7 +85,7 @@ UFS_HIDDEN int ufs_jornal_do(ufs_fd_t* fd, const ufs_jornal_op_t* ops, int num) 
     return 0;
 }
 
-UFS_HIDDEN int ufs_jornal_fix(ufs_fd_t* fd, ufs_sb_t* sb) {
+UFS_HIDDEN int ufs_jornal_fix(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict sb) {
     int ec;
     int i;
     _sb_jornal_t disk;

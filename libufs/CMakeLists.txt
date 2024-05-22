@@ -18,7 +18,7 @@ add_library(
 	libufs_bcache.c
 	libufs_zlist.c
 	libufs_ilist.c
-	libufs_inode.c
+	libufs_minode.c
 )
 include_directories(../libul/)
 

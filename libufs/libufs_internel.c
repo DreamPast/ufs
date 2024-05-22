@@ -25,3 +25,21 @@ UFS_API int ufs_union_error(int error) {
         return EINVAL;
     else return TABLE[error];
 }
+
+// 在Windows上，我们无法准确地实现UID和GID
+#ifdef _WIN32
+    UFS_API int32_t ufs_getuid(void) { return 0; }
+    UFS_API int32_t ufs_getgid(void) { return 0; }
+    UFS_API int ufs_setuid(int32_t uid) { (void)uid; return 0; }
+    UFS_API int ufs_setgid(int32_t gid) { (void)gid; return 0; }
+#else
+    #include <unistd.h>
+    UFS_API int32_t ufs_getuid(void) { return ul_static_cast(int32_t, getuid()); }
+    UFS_API int32_t ufs_getgid(void) { return ul_static_cast(int32_t, getgid()); }
+#endif
+
+#include "uldate.h"
+UFS_API int64_t ufs_time(int use_locale) {
+    const uldate_t date = use_locale ? uldate_now_locale() : uldate_now_utc();
+    return ul_likely(date != ULDATE_INVALID) ? date : 0;
+}

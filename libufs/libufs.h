@@ -30,13 +30,13 @@ extern "C" {
 
 /**
  * 错误代码
- * 
+ *
  * 部分代码我们难以准确地使用Unix style的error code表示，因此我们使用负数来表示这些错误
  * 如果你确实需要统一使用Unix Style的error code，可以使用ufs_uniform_error函数。
 */
 
 // 错误：未知错误
-#define UFS_ERROR_UNKOWN -1 
+#define UFS_ERROR_UNKOWN -1
 // 错误：无法读入足够的字节（这通常是因为遇到了EOF，但是我们的磁盘文件是对齐BLOCK_SIZE的，这个不应当发生）
 #define UFS_ERROR_READ_NOT_ENOUGH -2
 // 错误：磁盘已损坏（这通常是因为磁盘文件被外部程序进行了不正确的修改）
@@ -47,11 +47,17 @@ UFS_API const char* ufs_strerror(int error);
 // 将文件系统的自定义错误统一到Unix Style的error code
 UFS_API int ufs_uniform_error(int error);
 
+UFS_API int32_t ufs_getuid(void);
+UFS_API int32_t ufs_getgid(void);
+UFS_API int ufs_setuid(int32_t uid);
+UFS_API int ufs_setgid(int32_t gid);
+
+UFS_API int64_t ufs_time(int use_locale);
+
 
 /**
  * 文件描述符
 */
-
 
 typedef struct ufs_fd_t {
     const char* type;
@@ -100,80 +106,75 @@ UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
 #define UFS_BNUM_ZONE_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：zone开始块
 #define UFS_BNUM_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：开始块
 
+/**
+ * 预定义
+*/
 
-typedef struct ufs_sb_t {
-    uint8_t magic[2]; // 魔数
-    uint8_t jornal_num; // 最大日志数量
+#define UFS_S_IMASK   07777 // 文件权限掩码
+#define UFS_S_IALL    00777 // 所有人可读/写/执行
+#define UFS_S_IRALL   00444 // 所有人可读
+#define UFS_S_IWALL   00222 // 所有人可写
+#define UFS_S_IXALL   00111 // 所有人可执行
 
-#define UFS_JORNAL_OFFSET offsetof(ufs_sb_t, jornal_start0)
-    uint8_t jornal_start0; // 日志起始标记0
-    uint8_t jornal_start1; // 日志起始标记1
-    uint64_t jornal[UFS_JORNAL_NUM]; // 日志
-    uint8_t jornal_last1; // 日志终止标记1
-    uint8_t jornal_last0; // 日志终止标记0
-    uint8_t block_size_log2; // 块的大小（2的指数）
-    uint8_t ext_offset; // 扩展标记（仅作向后兼容，当前版本为0）
-    uint32_t _jd3;
+#define UFS_S_IRWXU   00700 // 等价(UFS_S_IRUSR | UFS_S_IWUSR | UFS_S_IXUSR)
+#define UFS_S_IRUSR   00400 // 归属者可读
+#define UFS_S_IWUSR   00200 // 归属者可写
+#define UFS_S_IXUSR   00100 // 归属者可执行
 
-    uint64_t inode_blocks; // inode块数
-    uint64_t zone_blocks; // zone块数
-    uint64_t inode_max_blocks; // 最大inode块数
-    uint64_t zone_max_blocks; // 最大zone块数
+#define UFS_S_IRWXG   00070 // 等价(UFS_S_IRGRP | UFS_S_IWGRP | UFS_S_IXGRP)
+#define UFS_S_IRGRP   00040 // 归属组可读
+#define UFS_S_IWGRP   00020 // 归属组可写
+#define UFS_S_IXGRP   00010 // 归属组可执行
 
-    uint64_t inode_start;
-    uint64_t zone_start;
-} ufs_sb_t;
-extern int UFS_S[sizeof(ufs_sb_t)];
+#define UFS_S_IRWXO   00007  // 等价(UFS_S_IROTH | UFS_S_IWOTH | UFS_S_IXOTH)
+#define UFS_S_IROTH   00004  // 其余人可读
+#define UFS_S_IWOTH   00002  // 其余人可写
+#define UFS_S_IXOTH   00001  // 其余人可执行
 
-typedef struct ufs_inode_t {
-    uint32_t nlink; // 链接数
-    uint16_t mode; // 模式
-    uint16_t _d2;
+#define UFS_S_IREAD   UFS_S_IRUSR // 归属者可读
+#define UFS_S_IWRITE  UFS_S_IWUSR // 归属者可写
+#define UFS_S_IEXEC   UFS_S_IXUSR // 归属者可执行
 
-    uint64_t size; // 文件大小
-    uint64_t blocks; // 文件块数
+// IFCHR（字符设备）, IFSOCK（套接字）, IFBLK（块设备）, IFIFO（FIFO文件）不被支持
+// TODO: 实现IFIFO
+#define UFS_S_IFMT    0170000 // 文件类型掩码
+#define UFS_S_IFLNK   0120000 // 符号链接
+#define UFS_S_IFREG   0100000 // 常规文件
+#define UFS_S_IFDIR   0040000 // 目录
 
-    int64_t ctime; // 创建时间
-    int64_t mtime; // 修改时间
-    int64_t atime; // 访问时间
+// #define UFS_S_IFSOCK  0140000 // 套接字
+// #define UFS_S_IFBLK   0060000 // 块设备
+// #define UFS_S_IFCHR   0020000 // 字符设备
+// #define UFS_S_IFIFO   0010000 // FIFO文件
 
-    int32_t uid; // 用户UID
-    int32_t gid; // 组GID
+#define UFS_S_ISLNK(val)  ((val & UFS_S_IFMT) == UFS_S_IFLNK)
+#define UFS_S_ISREG(val)  ((val & UFS_S_IFMT) == UFS_S_IFREG)
+#define UFS_S_ISDIR(val)  ((val & UFS_S_IFMT) == UFS_S_IFDIR)
+// #define UFS_S_ISSOCK(val) ((val & UFS_S_IFMT) == UFS_S_IFSOCK)
+// #define UFS_S_ISBLK(val)  ((val & UFS_S_IFMT) == UFS_S_IFBLK)
+// #define UFS_S_ISFIFO(val) ((val & UFS_S_IFMT) == UFS_S_IFIFO)
+// #define UFS_S_ISCHR(val)  ((val & UFS_S_IFMT) == UFS_S_IFCHR)
 
-    /*
-    块
+#define UFS_O_RDONLY    (1l << 0)  // 打开：只读
+#define UFS_O_WRONLY    (1l << 1)  // 打开：只写
+#define UFS_O_RDWR      (1l << 2)  // 打开：可读写
+#define UFS_O_CREAT     (1l << 3)  // 打开：如果文件不存在，创建它
+#define UFS_O_EXCL      (1l << 4)  // 打开：使用UFS_O_CREAT生效，如果文件已存在，打开失败
+#define UFS_O_TRUNC     (1l << 5)  // 打开：截断文件
+#define UFS_O_APPEND    (1l << 6)  // 打开：始终追加写入
+#define UFS_O_TEMPORARY (1l << 7)  // 打开：当文件被关闭时，移除文件
 
-    0 ~ 11  0级
-    12 ~ 13 1级
-    14      2级
-    15      3级
+#define UFS_O_NOFOLLOW  (1l << 8)  // 打开：阻止文件追寻符号链接（不允许读写）
+#define UFS_O_PATH      (1l << 9)  // 打开：准许打开目录（不允许读写）
+#define UFS_O_NOATIME   (1l << 10) // 打开：阻止修改ATIME（仅文件归属者/管理员准许此操作）
 
-    支持文件大小计算为:
-    (12 + 2 * (B / 8) + (B / 8) ** 2 + (B / 8) ** 3)
+#define UFS_O_DENYRD    (1l << 24) // 打开：阻止其它应用进行读取
+#define UFS_O_DENYWR    (1l << 24) // 打开：阻止其它应用进行写入
 
-    使用1KB时，~2GiB (2^31)
-    使用2KB时，~16GiB (2^34)
-    使用4KB时，~128GiB (2^37)
-    使用8KB时，~1025GiB (2^40)
-
-    */
-    uint64_t zones[16];
-
-
-    uint64_t _d[9];
-} ufs_inode_t;
-#define UFS_INODE_DISK_SIZE (256)
-#define UFS_INODE_PER_BLOCK (UFS_BLOCK_SIZE / UFS_INODE_DISK_SIZE)
-
-
-struct ufs_minode_t;
-typedef struct ufs_minode_t ufs_minode_t;
 
 
 struct ufs_t;
 typedef struct ufs_t ufs_t;
-
-
 
 #ifdef __cplusplus
 }

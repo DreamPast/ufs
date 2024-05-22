@@ -18,7 +18,7 @@ static _ilist_item_t* _todisk_alloc(const _ilist_item_t* item) {
     return ret;
 }
 
-static int _read_ilist(_ilist_item_t* item, ufs_bcache_t* bcache, uint64_t inum) {
+static int _read_ilist(_ilist_item_t* ufs_restrict item, ufs_bcache_t* ufs_restrict bcache, uint64_t inum) {
     int ec;
     int num = 0;
     ec = ufs_bcache_read(bcache, item, inum / UFS_INODE_PER_BLOCK,
@@ -32,11 +32,11 @@ static int _read_ilist(_ilist_item_t* item, ufs_bcache_t* bcache, uint64_t inum)
     item->inum = inum;
     return 0;
 }
-static int _write_ilist(const _ilist_item_t* item, ufs_bcache_t* bcache, uint64_t inum) {
+static int _write_ilist(const _ilist_item_t* ufs_restrict item, ufs_bcache_t* ufs_restrict bcache, uint64_t inum) {
     _ilist_item_t* ret;
     ret = _todisk_alloc(item);
     if(ul_unlikely(ret == NULL)) return ENOMEM;
-    return ufs_bcache_add(bcache, ret, inum / UFS_INODE_PER_BLOCK, UFS_BCACHE_ADD_MOVE | UFS_BCACHE_ADD_JORNAL,
+    return ufs_bcache_add(bcache, ret, inum / UFS_INODE_PER_BLOCK, UFS_BCACHE_ADD_MOVE,
         (inum % UFS_INODE_PER_BLOCK) * UFS_INODE_DISK_SIZE, UFS_INODE_DISK_SIZE);
 }
 
@@ -72,7 +72,7 @@ static int _write_multi_ilist(const ufs_ilist_t* ilist, int i, int n) {
     return 0;
 }
 
-UFS_HIDDEN int ufs_ilist_init(ufs_ilist_t* ilist, ufs_bcache_t* bcache, uint64_t start) {
+UFS_HIDDEN int ufs_ilist_init(ufs_ilist_t* ufs_restrict ilist, ufs_bcache_t* ufs_restrict bcache, uint64_t start) {
     int ec;
     ilist->bcache = bcache;
     ilist->top_inum = start;
@@ -89,7 +89,7 @@ UFS_HIDDEN void ufs_ilist_deinit(ufs_ilist_t* ilist) {
     (void)ilist;
 }
 
-static int _ilist_sync(ufs_ilist_t* ilist) {
+UFS_HIDDEN int ufs_ilist_sync_nolock(ufs_ilist_t* ilist) {
     int ec;
 
     ufs_assert(ilist->n > 0);
@@ -97,7 +97,7 @@ static int _ilist_sync(ufs_ilist_t* ilist) {
     if(ul_unlikely(ec)) return ec;
     return _write_ilist(ilist->item + ilist->n - 1, ilist->bcache, ilist->top_inum);
 }
-static int _ilist_pop(ufs_ilist_t* ilist, uint64_t* pinum) {
+UFS_HIDDEN int ufs_ilist_pop_nolock(ufs_ilist_t* ufs_restrict ilist, uint64_t* ufs_restrict pinum) {
     int ec;
     int n = ilist->n;
 
@@ -118,7 +118,7 @@ static int _ilist_pop(ufs_ilist_t* ilist, uint64_t* pinum) {
     ec = _rewind_ilist(ilist, *pinum);
     return ec;
 }
-static int _ilist_push(ufs_ilist_t* ilist, uint64_t inum) {
+UFS_HIDDEN int ufs_ilist_push_nolock(ufs_ilist_t* ilist, uint64_t inum) {
     int ec;
     int n = ilist->n;
 
@@ -133,7 +133,7 @@ static int _ilist_push(ufs_ilist_t* ilist, uint64_t inum) {
         if(ul_unlikely(ec)) return ec;
         memmove(ilist->item, ilist->item + UFS_ILIST_CACHE_LIST_LIMIT / 2, UFS_ILIST_CACHE_LIST_LIMIT);
         n = UFS_ILIST_CACHE_LIST_LIMIT / 2;
-    }   
+    }
     ilist->item[n - 1].inum = ilist->item[n].next = inum;
     ilist->item[n].num = 0;
     ilist->n = ++n;
@@ -143,25 +143,25 @@ static int _ilist_push(ufs_ilist_t* ilist, uint64_t inum) {
 UFS_HIDDEN int ufs_ilist_sync(ufs_ilist_t* ilist) {
     int ec;
     ulatomic_spinlock_lock(&ilist->lock);
-    ec = _ilist_sync(ilist);
+    ec = ufs_ilist_sync_nolock(ilist);
     ulatomic_spinlock_unlock(&ilist->lock);
     return ec;
 }
 UFS_HIDDEN int ufs_ilist_pop(ufs_ilist_t* ilist, uint64_t* pinum) {
     int ec;
     ulatomic_spinlock_lock(&ilist->lock);
-    ec = _ilist_pop(ilist, pinum);
+    ec = ufs_ilist_pop_nolock(ilist, pinum);
     ulatomic_spinlock_unlock(&ilist->lock);
     return ec;
 }
 UFS_HIDDEN int ufs_ilist_push(ufs_ilist_t* ilist, uint64_t inum) {
     int ec;
     ulatomic_spinlock_lock(&ilist->lock);
-    ec = _ilist_push(ilist, inum);
+    ec = ufs_ilist_push_nolock(ilist, inum);
     ulatomic_spinlock_unlock(&ilist->lock);
     return ec;
 }
-UFS_HIDDEN int ufs_calc_ilist_available(uint64_t num) {
+UFS_HIDDEN uint64_t ufs_calc_ilist_available(uint64_t num) {
     if(ul_unlikely(num == 0)) return 0;
-    return num - (num - 1) / UFS_ILIST_ENTRY_NUM_MAX;
+    return num - (num - 1) / ul_static_cast(uint64_t, UFS_ILIST_ENTRY_NUM_MAX);
 }

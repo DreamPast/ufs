@@ -18,7 +18,7 @@ static _zlist_item_t* _todisk_alloc(const _zlist_item_t* item) {
     return ret;
 }
 
-static int _read_zlist(_zlist_item_t* item, ufs_bcache_t* bcache, uint64_t znum) {
+static int _read_zlist(_zlist_item_t* ufs_restrict item, ufs_bcache_t* ufs_restrict bcache, uint64_t znum) {
     int ec;
     int num = 0;
     ec = ufs_bcache_read_block(bcache, item, znum);
@@ -31,11 +31,11 @@ static int _read_zlist(_zlist_item_t* item, ufs_bcache_t* bcache, uint64_t znum)
     item->znum = znum;
     return 0;
 }
-static int _write_zlist(const _zlist_item_t* item, ufs_bcache_t* bcache, uint64_t znum) {
+static int _write_zlist(const _zlist_item_t* ufs_restrict item, ufs_bcache_t* ufs_restrict bcache, uint64_t znum) {
     _zlist_item_t* ret;
     ret = _todisk_alloc(item);
     if(ul_unlikely(ret == NULL)) return ENOMEM;
-    return ufs_bcache_add_block(bcache, ret, znum, UFS_BCACHE_ADD_MOVE | UFS_BCACHE_ADD_JORNAL);
+    return ufs_bcache_add_block(bcache, ret, znum, UFS_BCACHE_ADD_MOVE);
 }
 
 static int _rewind_zlist(ufs_zlist_t* zlist, uint64_t znum) {
@@ -76,18 +76,19 @@ UFS_HIDDEN int ufs_zlist_init(ufs_zlist_t* zlist, ufs_bcache_t* bcache, uint64_t
     zlist->top_znum = start;
     ec = _rewind_zlist(zlist, start);
     if(ul_unlikely(ec)) return ec;
-    if(zlist->n == 0) { // 内存中必须至少滞留一个块
+    if(ul_unlikely(zlist->n == 0)) { // 内存中必须至少滞留一个块
         zlist->item[0].next = 0;
         zlist->item[0].num = 0;
         zlist->n = 1;
     }
+    ulatomic_spinlock_init(&zlist->lock);
     return 0;
 }
 UFS_HIDDEN void ufs_zlist_deinit(ufs_zlist_t* zlist) {
     (void)zlist;
 }
 
-static int _zlist_sync(ufs_zlist_t* zlist) {
+UFS_HIDDEN int ufs_zlist_sync_nolock(ufs_zlist_t* zlist) {
     int ec;
 
     ufs_assert(zlist->n > 0);
@@ -95,7 +96,7 @@ static int _zlist_sync(ufs_zlist_t* zlist) {
     if(ul_unlikely(ec)) return ec;
     return _write_zlist(zlist->item + zlist->n - 1, zlist->bcache, zlist->top_znum);
 }
-static int _zlist_pop(ufs_zlist_t* zlist, uint64_t* pznum) {
+UFS_HIDDEN int ufs_zlist_pop_nolock(ufs_zlist_t* ufs_restrict zlist, uint64_t* ufs_restrict pznum) {
     int ec;
     int n = zlist->n;
 
@@ -116,7 +117,7 @@ static int _zlist_pop(ufs_zlist_t* zlist, uint64_t* pznum) {
     ec = _rewind_zlist(zlist, *pznum);
     return ec;
 }
-static int _zlist_push(ufs_zlist_t* zlist, uint64_t znum) {
+UFS_HIDDEN int ufs_zlist_push_nolock(ufs_zlist_t* zlist, uint64_t znum) {
     int ec;
     int n = zlist->n;
 
@@ -131,7 +132,7 @@ static int _zlist_push(ufs_zlist_t* zlist, uint64_t znum) {
         if(ul_unlikely(ec)) return ec;
         memmove(zlist->item, zlist->item + UFS_ZLIST_CACHE_LIST_LIMIT / 2, UFS_ZLIST_CACHE_LIST_LIMIT);
         n = UFS_ZLIST_CACHE_LIST_LIMIT / 2;
-    }   
+    }
     zlist->item[n - 1].znum = zlist->item[n].next = znum;
     zlist->item[n].num = 0;
     zlist->n = ++n;
@@ -141,25 +142,25 @@ static int _zlist_push(ufs_zlist_t* zlist, uint64_t znum) {
 UFS_HIDDEN int ufs_zlist_sync(ufs_zlist_t* zlist) {
     int ec;
     ulatomic_spinlock_lock(&zlist->lock);
-    ec = _zlist_sync(zlist);
+    ec = ufs_zlist_sync_nolock(zlist);
     ulatomic_spinlock_unlock(&zlist->lock);
     return ec;
 }
-UFS_HIDDEN int ufs_zlist_pop(ufs_zlist_t* zlist, uint64_t* pznum) {
+UFS_HIDDEN int ufs_zlist_pop(ufs_zlist_t* ufs_restrict zlist, uint64_t* ufs_restrict pznum) {
     int ec;
     ulatomic_spinlock_lock(&zlist->lock);
-    ec = _zlist_pop(zlist, pznum);
+    ec = ufs_zlist_pop_nolock(zlist, pznum);
     ulatomic_spinlock_unlock(&zlist->lock);
     return ec;
 }
 UFS_HIDDEN int ufs_zlist_push(ufs_zlist_t* zlist, uint64_t znum) {
     int ec;
     ulatomic_spinlock_lock(&zlist->lock);
-    ec = _zlist_push(zlist, znum);
+    ec = ufs_zlist_push_nolock(zlist, znum);
     ulatomic_spinlock_unlock(&zlist->lock);
     return ec;
 }
-UFS_HIDDEN int ufs_calc_zlist_available(uint64_t num) {
+UFS_HIDDEN uint64_t ufs_calc_zlist_available(uint64_t num) {
     if(ul_unlikely(num == 0)) return 0;
-    return num - (num - 1) / UFS_ZLIST_ENTRY_NUM_MAX;
+    return num - (num - 1) / ul_static_cast(uint64_t, UFS_ZLIST_ENTRY_NUM_MAX);
 }
