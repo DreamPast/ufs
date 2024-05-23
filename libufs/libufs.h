@@ -17,8 +17,6 @@
     #define UFS_API
 #endif
 
-#define ufs_assert(cond) assert(cond)
-
 #define ufs_realloc(ptr, sz) realloc((ptr), (sz))
 #define ufs_free(ptr) free(ptr)
 #define ufs_malloc(sz) realloc(NULL, (sz))

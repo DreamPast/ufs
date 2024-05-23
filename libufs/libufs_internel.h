@@ -45,9 +45,6 @@ typedef struct ufs_sb_t {
     uint64_t zone_blocks; // zone块数
     uint64_t inode_max_blocks; // 最大inode块数
     uint64_t zone_max_blocks; // 最大zone块数
-
-    uint64_t inode_start;
-    uint64_t zone_start;
 } ufs_sb_t;
 
 typedef struct ufs_inode_t {
@@ -56,6 +53,7 @@ typedef struct ufs_inode_t {
     uint16_t _d2;
 
     uint64_t size; // 文件大小
+    uint64_t blocks; // 块数
 
     int64_t ctime; // 创建时间
     int64_t mtime; // 修改时间
@@ -75,10 +73,10 @@ typedef struct ufs_inode_t {
     支持文件大小计算为:
     (12 + 2 * (B / 8) + (B / 8) ** 2 + (B / 8) ** 3)
 
-    使用1KB时，~2GiB (2^31)
-    使用2KB时，~16GiB (2^34)
-    使用4KB时，~128GiB (2^37)
-    使用8KB时，~1025GiB (2^40)
+    使用1KB时，about 2GiB (2^31)
+    使用2KB时，about 16GiB (2^34)
+    使用4KB时，about 128GiB (2^37)
+    使用8KB时，about 1025GiB (2^40)
 
     */
     uint64_t zones[16];
@@ -94,6 +92,15 @@ typedef struct ufs_t ufs_t;
 /**
  * 文件描述符
 */
+
+ul_hapi void ufs_fd_close(ufs_fd_t* fd) { fd->close(fd); }
+ul_hapi int ufs_fd_pread(ufs_fd_t* fd, void* buf, size_t len, int64_t off, size_t* pread) {
+    return fd->pread(fd, buf, len, off, pread);
+}
+ul_hapi int ufs_fd_pwrite(ufs_fd_t* fd, const void* buf, size_t len, int64_t off, size_t* pwriten) {
+    return fd->pwrite(fd, buf, len, off, pwriten);
+}
+ul_hapi int ufs_fd_sync(ufs_fd_t* fd) { return fd->sync(fd); }
 
 #define ufs_fd_offset(bnum) ul_static_cast(int64_t, (bnum) * UFS_BLOCK_SIZE)
 #define ufs_fd_offset2(bnum, off) ul_static_cast(int64_t, (bnum) * UFS_BLOCK_SIZE + off)
@@ -130,15 +137,20 @@ typedef struct ufs_jmanager_t {
 
 UFS_HIDDEN int ufs_jmanager_init(ufs_jmanager_t* ufs_restrict jmanager, ufs_fd_t* ufs_restrict fd);
 UFS_HIDDEN void ufs_jmanager_deinit(ufs_jmanager_t* jmanager);
+
+UFS_HIDDEN void ufs_jmanager_merge(ufs_jmanager_t* jmanager);
 UFS_HIDDEN int ufs_jmanager_read_block(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum);
 UFS_HIDDEN int ufs_jmanager_read(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_jmanager_add(ufs_jmanager_t* jmanager, const void* ufs_restrict buf, uint64_t bnum, int flag);
 UFS_HIDDEN int ufs_jmanager_sync(ufs_jmanager_t* jmanager);
 
 ul_hapi void ufs_jmanager_lock(ufs_jmanager_t* jmanager) { ulatomic_spinlock_lock(&jmanager->lock); }
 ul_hapi void ufs_jmanager_unlock(ufs_jmanager_t* jmanager) { ulatomic_spinlock_unlock(&jmanager->lock); }
+UFS_HIDDEN void ufs_jmanager_merge_nolock(ufs_jmanager_t* jmanager);
 UFS_HIDDEN int ufs_jmanager_sync_nolock(ufs_jmanager_t* jmanager);
 UFS_HIDDEN int ufs_jmanager_read_block_nolock(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum);
 UFS_HIDDEN int ufs_jmanager_read_nolock(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_jmanager_add_nolock(ufs_jmanager_t* jmanager, const void* ufs_restrict buf, uint64_t bnum, int flag);
 
 typedef struct ufs_jornal_t {
     ufs_jmanager_t* jmanager;
@@ -160,6 +172,8 @@ UFS_HIDDEN int ufs_jornal_add_zero_block(ufs_jornal_t* jornal, uint64_t bnum);
 UFS_HIDDEN int ufs_jornal_add_zero(ufs_jornal_t* jornal, uint64_t bnum, size_t off, size_t len);
 UFS_HIDDEN int ufs_jornal_read_block(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum);
 UFS_HIDDEN int ufs_jornal_read(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_jornal_nolock_commit(ufs_jornal_t* jornal, int num) ;
+UFS_HIDDEN int ufs_jornal_nolock_commit_all(ufs_jornal_t* jornal);
 UFS_HIDDEN int ufs_jornal_commit(ufs_jornal_t* jornal, int num);
 UFS_HIDDEN int ufs_jornal_commit_all(ufs_jornal_t* jornal);
 UFS_HIDDEN void ufs_jornal_settop(ufs_jornal_t* jornal, int top);
@@ -198,10 +212,12 @@ UFS_HIDDEN uint64_t ufs_zlist_available(const ufs_zlist_t* ufs_restrict zlist);
 ul_hapi void ufs_zlist_lock(ufs_zlist_t* ufs_restrict zlist, ufs_jornal_t* ufs_restrict jornal) {
     ulatomic_spinlock_lock(&zlist->lock); zlist->jornal = jornal;
 }
-ul_hapi void ufs_zlist_unlock(ufs_zlist_t* zlist) { ulatomic_spinlock_unlock(&zlist->lock); }
-UFS_HIDDEN int ufs_zlist_sync(ufs_zlist_t* ufs_restrict zlist);
+ul_hapi void ufs_zlist_unlock(ufs_zlist_t* zlist) {
+    zlist->jornal = NULL; ulatomic_spinlock_unlock(&zlist->lock);
+}
+UFS_HIDDEN int ufs_zlist_sync(ufs_zlist_t* zlist);
 UFS_HIDDEN int ufs_zlist_pop(ufs_zlist_t* ufs_restrict zlist, uint64_t* ufs_restrict pznum);
-UFS_HIDDEN int ufs_zlist_push(ufs_zlist_t* ufs_restrict zlist, uint64_t znum);
+UFS_HIDDEN int ufs_zlist_push(ufs_zlist_t* zlist, uint64_t znum);
 
 
 #define UFS_ILIST_ENTRY_NUM_MAX (UFS_BLOCK_SIZE / UFS_INODE_PER_BLOCK / 8 - 1)
@@ -238,10 +254,12 @@ UFS_HIDDEN uint64_t ufs_ilist_available(const ufs_zlist_t* ufs_restrict ilist);
 ul_hapi void ufs_ilist_lock(ufs_ilist_t* ufs_restrict ilist, ufs_jornal_t* ufs_restrict jornal) {
     ulatomic_spinlock_lock(&ilist->lock); ilist->jornal = jornal;
 }
-ul_hapi void ufs_ilist_unlock(ufs_ilist_t* ilist) { ulatomic_spinlock_unlock(&ilist->lock); }
-UFS_HIDDEN int ufs_ilist_sync_nolock(ufs_ilist_t* ufs_restrict ilist);
-UFS_HIDDEN int ufs_ilist_pop_nolock(ufs_ilist_t* ufs_restrict ilist, uint64_t* ufs_restrict pinum);
-UFS_HIDDEN int ufs_ilist_push_nolock(ufs_ilist_t* ufs_restrict ilist, uint64_t inum);
+ul_hapi void ufs_ilist_unlock(ufs_ilist_t* ilist) {
+    ilist->jornal = NULL; ulatomic_spinlock_unlock(&ilist->lock);
+}
+UFS_HIDDEN int ufs_ilist_sync(ufs_ilist_t* ilist);
+UFS_HIDDEN int ufs_ilist_pop(ufs_ilist_t* ufs_restrict ilist, uint64_t* ufs_restrict pinum);
+UFS_HIDDEN int ufs_ilist_push(ufs_ilist_t* ilist, uint64_t inum);
 
 
 
@@ -253,12 +271,18 @@ UFS_HIDDEN int ufs_ilist_push_nolock(ufs_ilist_t* ufs_restrict ilist, uint64_t i
 typedef struct ufs_minode_t {
     ufs_inode_t inode;
     ufs_t* ufs;
+    uint64_t inum;
 } ufs_minode_t;
 
 #define UFS_MINODE_CACHE_MAX 1024
 
 UFS_HIDDEN int ufs_minode_init(ufs_t* ufs, ufs_minode_t* inode, uint64_t inum);
 
+typedef struct ufs_inode_create_t {
+    int32_t uid;
+    int32_t gid;
+    uint16_t mode;
+} ufs_inode_create_t;
 
 
 

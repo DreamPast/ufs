@@ -25,7 +25,7 @@ static int _remove_flag1(ufs_fd_t* fd) {
     if(ul_unlikely(ec)) return ec;
     ec = ufs_fd_pwrite_check(fd, &c, 1, ufs_fd_offset(UFS_BNUM_SB) + offsetof(ufs_sb_t, jornal_last1));
     if(ul_unlikely(ec)) return ec;
-    ec = fd->sync(fd);
+    ec = ufs_fd_sync(fd);
     if(ul_unlikely(ec)) return ec;
     return 0;
 }
@@ -36,7 +36,7 @@ static int _remove_flag2(ufs_fd_t* fd) {
     if(ul_unlikely(ec)) return ec;
     ec = ufs_fd_pwrite_check(fd, &c, 1, ufs_fd_offset(UFS_BNUM_SB) + offsetof(ufs_sb_t, jornal_last0));
     if(ul_unlikely(ec)) return ec;
-    ec = fd->sync(fd);
+    ec = ufs_fd_sync(fd);
     if(ul_unlikely(ec)) return ec;
     return 0;
 }
@@ -63,7 +63,7 @@ UFS_HIDDEN int ufs_do_jornal(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* u
     // 2. 将四个标记和日志偏移量写入
     ec = ufs_fd_pwrite_check(fd, _sb_jornal_start(&disk), _sb_jornal_size, ufs_fd_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
     if(ul_unlikely(ec)) return ec;
-    ec = fd->sync(fd);
+    ec = ufs_fd_sync(fd);
     if(ul_unlikely(ec)) return ec;
 
     // 3. 写入区块
@@ -71,7 +71,7 @@ UFS_HIDDEN int ufs_do_jornal(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* u
         ec = ufs_fd_pwrite_check(fd, ops[i].buf, UFS_BLOCK_SIZE, ufs_fd_offset(ops[i].bnum));
         if(ul_unlikely(ec)) return ec;
     }
-    ec = fd->sync(fd);
+    ec = ufs_fd_sync(fd);
     if(ul_unlikely(ec)) return ec;
 
     // 4. 擦除标记1
@@ -145,11 +145,35 @@ UFS_HIDDEN int ufs_jmanager_init(ufs_jmanager_t* ufs_restrict jmanager, ufs_fd_t
     return 0;
 }
 UFS_HIDDEN void ufs_jmanager_deinit(ufs_jmanager_t* jmanager) {
-    (void)jmanager;
+    int i;
+    for(i = jmanager->num - 1; i >= 0; --i)
+        if(jmanager->flag[i] & _UFS_JORNAL_ADD_ALLOC) {
+            ufs_free(ufs_const_cast(void*, jmanager->ops[i].buf));
+        }
+    jmanager->num = 0;
 }
 
+UFS_HIDDEN void ufs_jmanager_merge_nolock(ufs_jmanager_t* jmanager) {
+    int ec, i, j;
+    const int n = jmanager->num;
+    for(i = n - 1; i >= 0; --i)
+        for(j = i - 1; j >= 0; --j)
+            if(jmanager->ops[i].bnum == jmanager->ops[j].bnum) {
+
+                break;
+            }
+    for(i = 0, j = 0; i < n; ++i) {
+        if(jmanager->ops[i].buf != NULL) {
+            jmanager->ops[j] = jmanager->ops[i];
+            jmanager->flag[j] = jmanager->flag[i];
+            ++j;
+        }
+    }
+    jmanager->num = j;
+}
 UFS_HIDDEN int ufs_jmanager_sync_nolock(ufs_jmanager_t* jmanager) {
     int ec, i;
+    ufs_jmanager_merge_nolock(jmanager);
     ec = ufs_do_jornal(jmanager->fd, jmanager->ops, jmanager->num);
     if(ul_unlikely(ec)) return ec;
     for(i = jmanager->num - 1; i >= 0; --i)
@@ -177,7 +201,41 @@ UFS_HIDDEN int ufs_jmanager_read_nolock(ufs_jmanager_t* ufs_restrict jmanager, v
         }
     return ufs_fd_pread_check(jmanager->fd, buf, len, ufs_fd_offset2(bnum, off));
 }
+UFS_HIDDEN int ufs_jmanager_add_nolock(ufs_jmanager_t* jmanager, const void* ufs_restrict buf, uint64_t bnum, int flag) {
+    if(ul_unlikely(jmanager->num == UFS_JORNAL_NUM)) {
+        int ec = ufs_jmanager_sync_nolock(jmanager);
+        if(ul_unlikely(ec)) {
+            if(flag == UFS_JORNAL_ADD_REF) ufs_free(ufs_const_cast(void*, buf));
+            return ec;
+        }
+    }
+    switch(flag) {
+    case UFS_JORNAL_ADD_REF:
+        jmanager->ops[jmanager->num].buf = buf;
+        break;
+    case UFS_JORNAL_ADD_COPY:
+        jmanager->ops[jmanager->num].buf = ufs_malloc(UFS_BLOCK_SIZE);
+        if(ul_unlikely(jmanager->ops[jmanager->num].buf == NULL)) return ENOMEM;
+        memcpy(ufs_const_cast(void*, jmanager->ops[jmanager->num].buf), buf, UFS_BLOCK_SIZE);
+        break;
+    case UFS_JORNAL_ADD_MOVE:
+        jmanager->ops[jmanager->num].buf = buf;
+        buf = NULL;
+        break;
+    default:
+        return EINVAL;
+    }
+    jmanager->flag[jmanager->num] = flag & 3;
+    jmanager->ops[jmanager->num].bnum = bnum;
+    ++jmanager->num;
+    return 0;
+}
 
+UFS_HIDDEN void ufs_jmanager_merge(ufs_jmanager_t* jmanager) {
+    ufs_jmanager_lock(jmanager);
+    ufs_jmanager_merge_nolock(jmanager);
+    ufs_jmanager_unlock(jmanager);
+}
 UFS_HIDDEN int ufs_jmanager_read_block(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum) {
     int ec;
     ufs_jmanager_lock(jmanager);
@@ -199,6 +257,13 @@ UFS_HIDDEN int ufs_jmanager_sync(ufs_jmanager_t* jmanager) {
     ufs_jmanager_unlock(jmanager);
     return ec;
 }
+UFS_HIDDEN int ufs_jmanager_add(ufs_jmanager_t* jmanager, const void* ufs_restrict buf, uint64_t bnum, int flag) {
+    int ec;
+    ufs_jmanager_lock(jmanager);
+    ec = ufs_jmanager_add_nolock(jmanager, buf, bnum, flag);
+    ufs_jmanager_unlock(jmanager);
+    return ec;
+}
 
 
 UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_jmanager_t* ufs_restrict jmanager) {
@@ -207,7 +272,7 @@ UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_jmanager_t
     return 0;
 }
 UFS_HIDDEN void ufs_jornal_deinit(ufs_jornal_t* jornal) {
-    (void)jornal;
+    ufs_jornal_settop(jornal, 0);
 }
 UFS_HIDDEN int ufs_jornal_add(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag) {
     int ec;
@@ -270,17 +335,24 @@ UFS_HIDDEN int ufs_jornal_read_block(ufs_jornal_t* ufs_restrict jornal, void* uf
 UFS_HIDDEN int ufs_jornal_read(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
     return ufs_jmanager_read(jornal->jmanager, buf, bnum, off, len);
 }
-UFS_HIDDEN int ufs_jornal_commit(ufs_jornal_t* jornal, int num) {
-    int ec = 0;
-    ufs_jmanager_lock(jornal->jmanager);
+UFS_HIDDEN int ufs_jornal_nolock_commit(ufs_jornal_t* jornal, int num) {
     if(jornal->jmanager->num + num > UFS_JORNAL_NUM) {
-        ec = ufs_jmanager_sync_nolock(jornal->jmanager);
-        if(ul_unlikely(ec)) goto do_return;
+        int ec = ufs_jmanager_sync_nolock(jornal->jmanager);
+        if(ul_unlikely(ec)) return ec;
     }
     memcpy(jornal->jmanager->ops + jornal->jmanager->num, jornal->ops, ul_static_cast(size_t, jornal->num) * sizeof(jornal->ops[0]));
     memcpy(jornal->jmanager->flag + jornal->jmanager->num, jornal->flag, ul_static_cast(size_t, jornal->num) * sizeof(jornal->flag[0]));
     jornal->jmanager->num += jornal->num;
-do_return:
+    ufs_jmanager_merge_nolock(jornal->jmanager);
+    return 0;
+}
+UFS_HIDDEN int ufs_jornal_nolock_commit_all(ufs_jornal_t* jornal) {
+    return ufs_jornal_nolock_commit(jornal, jornal->num);
+}
+UFS_HIDDEN int ufs_jornal_commit(ufs_jornal_t* jornal, int num) {
+    int ec;
+    ufs_jmanager_lock(jornal->jmanager);
+    ec = ufs_jornal_nolock_commit(jornal, num);
     ufs_jmanager_unlock(jornal->jmanager);
     return ec;
 }
@@ -289,7 +361,7 @@ UFS_HIDDEN int ufs_jornal_commit_all(ufs_jornal_t* jornal) {
 }
 UFS_HIDDEN void ufs_jornal_settop(ufs_jornal_t* jornal, int top) {
     int i;
-    ufs_assert(top < jornal->num);
+    ufs_assert(top <= jornal->num);
     for(i = top; i < jornal->num; ++i)
         if(jornal->flag[i] & _UFS_JORNAL_ADD_ALLOC) {
             ufs_free(ufs_const_cast(void*, jornal->ops[i].buf));

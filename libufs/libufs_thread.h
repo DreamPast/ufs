@@ -48,16 +48,26 @@
 #endif
 
 #ifndef ufs_restrict
-  #if defined(_MSC_VER)
-    #define ufs_restrict __restrict
-  #elif defined(__GNUC__) && __GNUC__ > 3
-    #define ufs_restrict __restrict__
-  #elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
-    #define ufs_restrict restrict
-  #else
-    #define ufs_restrict
-  #endif
+    #if defined(_MSC_VER)
+        #define ufs_restrict __restrict
+    #elif defined(__GNUC__) && __GNUC__ > 3
+        #define ufs_restrict __restrict__
+    #elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 199901L)
+        #define ufs_restrict restrict
+    #else
+        #define ufs_restrict
+    #endif
 #endif /* ufs_restrict */
+
+#define ufs_assert(cond) assert(cond)
+
+#define _UFS_STRINGIFY(x) #x
+#define UFS_STRINGIFY(x) _UFS_STRINGIFY(x)
+
+#include <stdio.h>
+#define ufs_errabort(filename, funcname, msg) do { \
+    fputs(filename funcname "(" UFS_STRINGIFY(__LINE__) "):" msg , stderr); exit(1); } while(0)
+
 
 #include "libufs.h"
 #include "ulatomic.h"

@@ -73,6 +73,7 @@ static int _write_multi_zlist(const ufs_zlist_t* zlist, int i, int n) {
 UFS_HIDDEN int ufs_zlist_init(ufs_zlist_t* zlist,  uint64_t start) {
     int ec;
     zlist->top_znum = start;
+    zlist->jornal = NULL;
     ec = _rewind_zlist(zlist, start);
     if(ul_unlikely(ec)) return ec;
     if(ul_unlikely(zlist->n == 0)) { // 内存中必须至少滞留一个块

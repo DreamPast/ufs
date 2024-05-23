@@ -75,6 +75,7 @@ static int _write_multi_ilist(const ufs_ilist_t* ilist, int i, int n) {
 UFS_HIDDEN int ufs_ilist_init(ufs_ilist_t* ufs_restrict ilist, uint64_t start) {
     int ec;
     ilist->top_inum = start;
+    ilist->jornal = NULL;
     ec = _rewind_ilist(ilist, start);
     if(ul_unlikely(ec)) return ec;
     if(ilist->n == 0) { // 内存中必须至少滞留一个块
