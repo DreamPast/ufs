@@ -42,3 +42,8 @@ if(1)
 		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4")
 	endif()
 endif()
+
+if(0)
+	add_executable(libufs-test test.c)
+	target_link_libraries(libufs-test libufs)
+endif()

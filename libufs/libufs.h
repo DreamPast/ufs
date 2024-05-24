@@ -6,7 +6,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
-#include <assert.h>
+#include <stdio.h>
 
 #ifdef UFS_BUILD_DLL
     #ifdef _WIN32
@@ -51,6 +51,8 @@ UFS_API int ufs_setuid(int32_t uid);
 UFS_API int ufs_setgid(int32_t gid);
 
 UFS_API int64_t ufs_time(int use_locale);
+UFS_API size_t ufs_strtime(int64_t time, char* buf, const char* fmt, size_t len);
+UFS_API int ufs_ptime(int64_t time, const char* fmt, FILE* fp);
 
 
 /**
@@ -100,9 +102,9 @@ UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
 #define UFS_BNUM_COMPACT (0) // 块号：兼容块（不使用此块，以便兼容BIOS/UEFI）
 #define UFS_BNUM_SB (1) // 块号：超级块
 #define UFS_BNUM_JORNAL (2) // 块号：日志块
-#define UFS_BNUM_INODE_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：inode开始块
-#define UFS_BNUM_ZONE_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：zone开始块
-#define UFS_BNUM_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：开始块
+#define UFS_BNUM_ILIST (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 1) // 块号：inode开始块
+#define UFS_BNUM_ZLIST (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 2) // 块号：zone开始块
+#define UFS_BNUM_START (UFS_BNUM_JORNAL + UFS_JORNAL_NUM + 3) // 块号：开始块
 
 /**
  * 预定义

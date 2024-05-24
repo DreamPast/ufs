@@ -10,15 +10,15 @@
 #endif
 
 #ifdef __clang__
-    #define UFS_HIDDEN __attribute__((__visibility__("hidden")))
+    #define UFS_HIDDEN ul_unused __attribute__((__visibility__("hidden")))
 #elif defined(__GNUC__) && __GNUC__ >= 4
-    #define UFS_HIDDEN __attribute__((__visibility__("hidden")))
+    #define UFS_HIDDEN ul_unused __attribute__((__visibility__("hidden")))
 #else
-    #define UFS_HIDDEN
+    #define UFS_HIDDEN ul_unused
 #endif
-#ifdef _WIN32
+#ifdef _WIN32 // Windows下默认符号不导出
     #undef UFS_HIDDEN
-    #define UFS_HIDDEN
+    #define UFS_HIDDEN ul_unused
 #endif
 
 #ifdef __cplusplus
@@ -59,19 +59,25 @@
     #endif
 #endif /* ufs_restrict */
 
+#include "libufs.h"
+#include "ulatomic.h"
+#include "ulmtx.h"
+
+#include <stddef.h>
+
+#define ufs_min(lv, rv) ((lv) < (rv) ? (lv) : (rv))
+#define ufs_max(lv, rv) ((lv) > (rv) ? (lv) : (rv))
+
+#include <assert.h>
 #define ufs_assert(cond) assert(cond)
 
 #define _UFS_STRINGIFY(x) #x
 #define UFS_STRINGIFY(x) _UFS_STRINGIFY(x)
 
 #include <stdio.h>
+#include <inttypes.h>
 #define ufs_errabort(filename, funcname, msg) do { \
     fputs(filename funcname "(" UFS_STRINGIFY(__LINE__) "):" msg , stderr); exit(1); } while(0)
-
-
-#include "libufs.h"
-#include "ulatomic.h"
-#include "ulmtx.h"
 
 /*
 typedef struct ufs_threadpool_t {

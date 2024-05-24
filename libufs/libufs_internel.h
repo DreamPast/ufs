@@ -41,10 +41,10 @@ typedef struct ufs_sb_t {
     uint8_t ext_offset; // 扩展标记（仅作向后兼容，当前版本为0）
     uint32_t _jd3;
 
-    uint64_t inode_blocks; // inode块数
-    uint64_t zone_blocks; // zone块数
-    uint64_t inode_max_blocks; // 最大inode块数
-    uint64_t zone_max_blocks; // 最大zone块数
+    uint64_t iblock; // inode块数
+    uint64_t zblock; // zone块数
+    uint64_t iblock_max; // 最大inode块数
+    uint64_t zblock_max; // 最大zone块数
 } ufs_sb_t;
 
 typedef struct ufs_inode_t {
@@ -85,9 +85,12 @@ typedef struct ufs_inode_t {
 #define UFS_INODE_MEMORY_SIZE (sizeof(ufs_inode_t))
 #define UFS_INODE_PER_BLOCK (UFS_BLOCK_SIZE / UFS_INODE_DISK_SIZE)
 #define UFS_ZNUM_PER_BLOCK (UFS_BLOCK_SIZE / 8)
+UFS_HIDDEN void ufs_inode_debug(const ufs_inode_t* inode, FILE* fp);
 
 struct ufs_t;
 typedef struct ufs_t ufs_t;
+
+
 
 /**
  * 文件描述符
@@ -111,6 +114,8 @@ UFS_HIDDEN int ufs_fd_pwrite_check(ufs_fd_t* ufs_restrict fd, const void* ufs_re
 UFS_HIDDEN int ufs_fd_copy(ufs_fd_t* fd, int64_t off_in, int64_t off_out, size_t len);
 UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off);
 
+
+
 /**
  * 文件系统日志
  *
@@ -127,139 +132,154 @@ typedef struct ufs_jornal_op_t {
 UFS_HIDDEN int ufs_fix_jornal(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict sb);
 UFS_HIDDEN int ufs_do_jornal(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* ufs_restrict ops, int num);
 
-typedef struct ufs_jmanager_t {
+
+
+typedef struct ufs_jornal_t {
     ufs_fd_t* fd;
     ufs_jornal_op_t ops[UFS_JORNAL_NUM];
     int flag[UFS_JORNAL_NUM];
     int num;
     ulatomic_spinlock_t lock;
-} ufs_jmanager_t;
+} ufs_jornal_t;
 
-UFS_HIDDEN int ufs_jmanager_init(ufs_jmanager_t* ufs_restrict jmanager, ufs_fd_t* ufs_restrict fd);
-UFS_HIDDEN void ufs_jmanager_deinit(ufs_jmanager_t* jmanager);
+UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_fd_t* ufs_restrict fd);
+UFS_HIDDEN void ufs_jornal_deinit(ufs_jornal_t* jornal);
 
-UFS_HIDDEN void ufs_jmanager_merge(ufs_jmanager_t* jmanager);
-UFS_HIDDEN int ufs_jmanager_read_block(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum);
-UFS_HIDDEN int ufs_jmanager_read(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
-UFS_HIDDEN int ufs_jmanager_add(ufs_jmanager_t* jmanager, const void* ufs_restrict buf, uint64_t bnum, int flag);
-UFS_HIDDEN int ufs_jmanager_sync(ufs_jmanager_t* jmanager);
+UFS_HIDDEN void ufs_jornal_merge(ufs_jornal_t* jornal);
+UFS_HIDDEN int ufs_jornal_read_block(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum);
+UFS_HIDDEN int ufs_jornal_read(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_jornal_add(ufs_jornal_t* jornal, const void* ufs_restrict buf, uint64_t bnum, int flag);
+UFS_HIDDEN int ufs_jornal_sync(ufs_jornal_t* jornal);
 
-ul_hapi void ufs_jmanager_lock(ufs_jmanager_t* jmanager) { ulatomic_spinlock_lock(&jmanager->lock); }
-ul_hapi void ufs_jmanager_unlock(ufs_jmanager_t* jmanager) { ulatomic_spinlock_unlock(&jmanager->lock); }
-UFS_HIDDEN void ufs_jmanager_merge_nolock(ufs_jmanager_t* jmanager);
-UFS_HIDDEN int ufs_jmanager_sync_nolock(ufs_jmanager_t* jmanager);
-UFS_HIDDEN int ufs_jmanager_read_block_nolock(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum);
-UFS_HIDDEN int ufs_jmanager_read_nolock(ufs_jmanager_t* ufs_restrict jmanager, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
-UFS_HIDDEN int ufs_jmanager_add_nolock(ufs_jmanager_t* jmanager, const void* ufs_restrict buf, uint64_t bnum, int flag);
+ul_hapi void ufs_jornal_lock(ufs_jornal_t* jornal) { ulatomic_spinlock_lock(&jornal->lock); }
+ul_hapi void ufs_jornal_unlock(ufs_jornal_t* jornal) { ulatomic_spinlock_unlock(&jornal->lock); }
+UFS_HIDDEN void ufs_jornal_merge_nolock(ufs_jornal_t* jornal);
+UFS_HIDDEN int ufs_jornal_sync_nolock(ufs_jornal_t* jornal);
+UFS_HIDDEN int ufs_jornal_read_block_nolock(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum);
+UFS_HIDDEN int ufs_jornal_read_nolock(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_jornal_add_nolock(ufs_jornal_t* jornal, const void* ufs_restrict buf, uint64_t bnum, int flag);
 
-typedef struct ufs_jornal_t {
-    ufs_jmanager_t* jmanager;
+
+
+typedef struct ufs_transcation_t {
+    ufs_jornal_t* jornal;
     ufs_jornal_op_t ops[UFS_JORNAL_NUM];
     int flag[UFS_JORNAL_NUM];
     int num;
-} ufs_jornal_t;
+} ufs_transcation_t;
 
-UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_jmanager_t* ufs_restrict jmanager);
-UFS_HIDDEN void ufs_jornal_deinit(ufs_jornal_t* jornal);
+UFS_HIDDEN int ufs_transcation_init(ufs_transcation_t* ufs_restrict transcation, ufs_jornal_t* ufs_restrict jornal);
+UFS_HIDDEN void ufs_transcation_deinit(ufs_transcation_t* transcation);
 #define _UFS_JORNAL_ADD_ALLOC 1
 #define _UFS_JORNAL_ADD_COPY  2
 #define UFS_JORNAL_ADD_REF  0 // 仅引用
 #define UFS_JORNAL_ADD_MOVE 1 // 转移（自动使用ufs_free销毁）
 #define UFS_JORNAL_ADD_COPY 3 // 拷贝
-UFS_HIDDEN int ufs_jornal_add(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag);
-UFS_HIDDEN int ufs_jornal_add_block(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, int flag);
-UFS_HIDDEN int ufs_jornal_add_zero_block(ufs_jornal_t* jornal, uint64_t bnum);
-UFS_HIDDEN int ufs_jornal_add_zero(ufs_jornal_t* jornal, uint64_t bnum, size_t off, size_t len);
-UFS_HIDDEN int ufs_jornal_read_block(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum);
-UFS_HIDDEN int ufs_jornal_read(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
-UFS_HIDDEN int ufs_jornal_nolock_commit(ufs_jornal_t* jornal, int num) ;
-UFS_HIDDEN int ufs_jornal_nolock_commit_all(ufs_jornal_t* jornal);
-UFS_HIDDEN int ufs_jornal_commit(ufs_jornal_t* jornal, int num);
-UFS_HIDDEN int ufs_jornal_commit_all(ufs_jornal_t* jornal);
-UFS_HIDDEN void ufs_jornal_settop(ufs_jornal_t* jornal, int top);
+UFS_HIDDEN int ufs_transcation_add(ufs_transcation_t* ufs_restrict transcation, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag);
+UFS_HIDDEN int ufs_transcation_add_block(ufs_transcation_t* ufs_restrict transcation, const void* ufs_restrict buf, uint64_t bnum, int flag);
+UFS_HIDDEN int ufs_transcation_add_zero_block(ufs_transcation_t* transcation, uint64_t bnum);
+UFS_HIDDEN int ufs_transcation_add_zero(ufs_transcation_t* transcation, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_transcation_read_block(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum);
+UFS_HIDDEN int ufs_transcation_read(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_transcation_commit(ufs_transcation_t* transcation, int num);
+UFS_HIDDEN int ufs_transcation_commit_all(ufs_transcation_t* transcation);
+
+UFS_HIDDEN int ufs_transcation_nolock_add(ufs_transcation_t* ufs_restrict transcation, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag);
+UFS_HIDDEN int ufs_transcation_nolock_add_block(ufs_transcation_t* ufs_restrict transcation, const void* ufs_restrict buf, uint64_t bnum, int flag);
+UFS_HIDDEN int ufs_transcation_nolock_add_zero_block(ufs_transcation_t* transcation, uint64_t bnum);
+UFS_HIDDEN int ufs_transcation_nolock_add_zero(ufs_transcation_t* transcation, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_transcation_nolock_read_block(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum);
+UFS_HIDDEN int ufs_transcation_nolock_read(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len);
+UFS_HIDDEN int ufs_transcation_nolock_commit(ufs_transcation_t* transcation, int num);
+UFS_HIDDEN int ufs_transcation_nolock_commit_all(ufs_transcation_t* transcation);
+
+UFS_HIDDEN void ufs_transcation_settop(ufs_transcation_t* transcation, int top);
 
 
 
 #define UFS_ZLIST_ENTRY_NUM_MAX (UFS_BLOCK_SIZE / 8 - 1)
 #define UFS_ZLIST_CACHE_LIST_LIMIT (8)
-/**
- * 成组链接法的单项（zone部分）（非线程安全）
- */
-typedef struct _zlist_item_t {
+typedef struct _ufs_zlist_item_t {
     uint64_t next; // 下一个链接的块号（0表示没有）
     uint64_t stack[UFS_ZLIST_ENTRY_NUM_MAX];
 
     // 以下内容保存在内存中
     uint64_t znum;
     int num; // 剩余块的数量
-} _zlist_item_t;
-
-/**
- * 成组链接法（zone部分）
-*/
+} _ufs_zlist_item_t;
+typedef struct _ufs_zlist_t {
+    _ufs_zlist_item_t item[UFS_ZLIST_CACHE_LIST_LIMIT];
+    uint64_t block;
+    int top, stop;
+} _ufs_zlist_t;
 typedef struct ufs_zlist_t {
-    _zlist_item_t item[UFS_ZLIST_CACHE_LIST_LIMIT];
-    uint64_t top_znum;
-    ufs_jornal_t* jornal;
-    uint64_t num;
-    int n;
-    ulatomic_spinlock_t lock;
+    _ufs_zlist_t now, backup;
+    uint64_t bnum;
+    ufs_transcation_t* transcation;
+    ulatomic_flag_t lock;
 } ufs_zlist_t;
-UFS_HIDDEN int ufs_zlist_init(ufs_zlist_t* ilist, uint64_t start);
-UFS_HIDDEN void ufs_zlist_deinit(ufs_zlist_t* zlist);
-UFS_HIDDEN uint64_t ufs_zlist_available(const ufs_zlist_t* ufs_restrict zlist);
+extern int s[sizeof(ufs_zlist_t)];
 
-ul_hapi void ufs_zlist_lock(ufs_zlist_t* ufs_restrict zlist, ufs_jornal_t* ufs_restrict jornal) {
-    ulatomic_spinlock_lock(&zlist->lock); zlist->jornal = jornal;
+UFS_HIDDEN int ufs_zlist_init(ufs_zlist_t* zlist, uint64_t start, uint64_t block);
+UFS_HIDDEN int ufs_zlist_create_empty(ufs_zlist_t* zlist, uint64_t start);
+UFS_HIDDEN void ufs_zlist_deinit(ufs_zlist_t* zlist);
+ul_hapi void ufs_zlist_backup(ufs_zlist_t* zlist) { zlist->backup = zlist->now; }
+ul_hapi void ufs_zlist_rollback(ufs_zlist_t* zlist) { zlist->now = zlist->backup; }
+ul_hapi void ufs_zlist_lock(ufs_zlist_t* ufs_restrict zlist, ufs_transcation_t* ufs_restrict transcation) {
+    ulatomic_spinlock_lock(&zlist->lock);
+    zlist->transcation = transcation;
+    ufs_zlist_backup(zlist);
 }
 ul_hapi void ufs_zlist_unlock(ufs_zlist_t* zlist) {
-    zlist->jornal = NULL; ulatomic_spinlock_unlock(&zlist->lock);
+    zlist->transcation = NULL;
+    ulatomic_spinlock_unlock(&zlist->lock);
 }
 UFS_HIDDEN int ufs_zlist_sync(ufs_zlist_t* zlist);
 UFS_HIDDEN int ufs_zlist_pop(ufs_zlist_t* ufs_restrict zlist, uint64_t* ufs_restrict pznum);
 UFS_HIDDEN int ufs_zlist_push(ufs_zlist_t* zlist, uint64_t znum);
+UFS_HIDDEN void ufs_zlist_debug(const ufs_zlist_t* zlist, FILE* fp);
+
 
 
 #define UFS_ILIST_ENTRY_NUM_MAX (UFS_BLOCK_SIZE / UFS_INODE_PER_BLOCK / 8 - 1)
 #define UFS_ILIST_CACHE_LIST_LIMIT (32)
-/**
- * 成组链接法的单项（inode部分）（非线程安全）
- *
- * 由于一个块可以存放多个inode，因此我们单独实现了inode和zone的成组链接法。
- */
-typedef struct _ilist_item_t {
+typedef struct _ufs_ilist_item_t {
     uint64_t next; // 下一个链接的块号（0表示没有）
     uint64_t stack[UFS_ILIST_ENTRY_NUM_MAX];
 
     // 以下内容保存在内存中
     uint64_t inum;
     int num; // 剩余块的数量
-} _ilist_item_t;
-
-/**
- * 成组链接法（inode部分）
-*/
+} _ufs_ilist_item_t;
+typedef struct _ufs_ilist_t {
+    _ufs_ilist_item_t item[UFS_ILIST_CACHE_LIST_LIMIT];
+    uint64_t block;
+    int top, stop;
+} _ufs_ilist_t;
 typedef struct ufs_ilist_t {
-    _ilist_item_t item[UFS_ILIST_CACHE_LIST_LIMIT];
-    uint64_t top_inum;
-    ufs_jornal_t* jornal;
-    uint64_t num;
-    int n;
-    ulatomic_spinlock_t lock;
+    _ufs_ilist_t now, backup;
+    uint64_t bnum;
+    ufs_transcation_t* transcation;
+    ulatomic_flag_t lock;
 } ufs_ilist_t;
-UFS_HIDDEN int ufs_ilist_init(ufs_ilist_t* ilist, uint64_t start);
+UFS_HIDDEN int ufs_ilist_init(ufs_ilist_t* ilist, uint64_t start, uint64_t block);
+UFS_HIDDEN int ufs_ilist_create_empty(ufs_ilist_t* ilist, uint64_t start);
 UFS_HIDDEN void ufs_ilist_deinit(ufs_ilist_t* ilist);
-UFS_HIDDEN uint64_t ufs_ilist_available(const ufs_zlist_t* ufs_restrict ilist);
-
-ul_hapi void ufs_ilist_lock(ufs_ilist_t* ufs_restrict ilist, ufs_jornal_t* ufs_restrict jornal) {
-    ulatomic_spinlock_lock(&ilist->lock); ilist->jornal = jornal;
+ul_hapi void ufs_ilist_backup(ufs_ilist_t* ilist) { ilist->backup = ilist->now; }
+ul_hapi void ufs_ilist_rollback(ufs_ilist_t* ilist) { ilist->now = ilist->backup; }
+ul_hapi void ufs_ilist_lock(ufs_ilist_t* ufs_restrict ilist, ufs_transcation_t* ufs_restrict transcation) {
+    ulatomic_spinlock_lock(&ilist->lock);
+    ilist->transcation = transcation;
+    ufs_ilist_backup(ilist);
 }
 ul_hapi void ufs_ilist_unlock(ufs_ilist_t* ilist) {
-    ilist->jornal = NULL; ulatomic_spinlock_unlock(&ilist->lock);
+    ilist->transcation = NULL;
+    ulatomic_spinlock_unlock(&ilist->lock);
 }
 UFS_HIDDEN int ufs_ilist_sync(ufs_ilist_t* ilist);
 UFS_HIDDEN int ufs_ilist_pop(ufs_ilist_t* ufs_restrict ilist, uint64_t* ufs_restrict pinum);
 UFS_HIDDEN int ufs_ilist_push(ufs_ilist_t* ilist, uint64_t inum);
+UFS_HIDDEN void ufs_ilist_debug(const ufs_ilist_t* ilist, FILE* fp);
 
 
 
@@ -276,20 +296,35 @@ typedef struct ufs_minode_t {
 
 #define UFS_MINODE_CACHE_MAX 1024
 
-UFS_HIDDEN int ufs_minode_init(ufs_t* ufs, ufs_minode_t* inode, uint64_t inum);
-
+UFS_HIDDEN int ufs_minode_init(ufs_t* ufs_restrict ufs, ufs_minode_t* ufs_restrict inode, uint64_t inum);
+UFS_HIDDEN int ufs_minode_deinit(ufs_minode_t* inode);
 typedef struct ufs_inode_create_t {
     int32_t uid;
     int32_t gid;
     uint16_t mode;
 } ufs_inode_create_t;
+UFS_HIDDEN int ufs_minode_create(ufs_t* ufs_restrict ufs, ufs_minode_t* ufs_restrict inode, const ufs_inode_create_t* ufs_restrict creat);
+UFS_HIDDEN int ufs_minode_pread(
+    ufs_minode_t* ufs_restrict inode, ufs_transcation_t* ufs_restrict transcation,
+    char* ufs_restrict buf, size_t len, uint64_t off, size_t* ufs_restrict pread
+);
+UFS_HIDDEN int ufs_minode_pwrite(
+    ufs_minode_t* ufs_restrict inode, ufs_transcation_t* ufs_restrict transcation,
+    const char* ufs_restrict buf, size_t len, uint64_t off, size_t* ufs_restrict pwriten
+);
+UFS_HIDDEN int ufs_minode_sync_meta(ufs_minode_t* inode);
+UFS_HIDDEN int ufs_minode_sync(ufs_minode_t* inode, int only_data);
+UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block, uint64_t* pblock);
+UFS_HIDDEN int ufs_minode_shrink(ufs_minode_t* inode, uint64_t block);
+UFS_HIDDEN int ufs_minode_resize(ufs_minode_t* inode, uint64_t size);
+UFS_HIDDEN void ufs_minode_debug(const ufs_minode_t* inode, FILE* fp);
 
 
 
 struct ufs_t {
     ufs_sb_t sb;
     ufs_fd_t* fd;
-    ufs_jmanager_t jmanager;
+    ufs_jornal_t jornal;
 
     ufs_zlist_t zlist;
     ufs_ilist_t ilist;

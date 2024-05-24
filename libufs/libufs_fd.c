@@ -10,11 +10,12 @@ UFS_HIDDEN int ufs_fd_pread_check(ufs_fd_t* ufs_restrict fd, void* ufs_restrict 
         ec = fd->pread(fd, _buf, len, off, &read);
         if(ec == 0) {
             if(read == 0) {
-                return UFS_ERROR_READ_NOT_ENOUGH;
+                memset(_buf, 0, len);
+                read = len;
             }
             _buf += read;
             len -= read;
-            off += read;
+            off += ul_static_cast(int64_t, read);
         } else if(ec != EAGAIN && ec != EWOULDBLOCK) return ec;
     }
     return 0;
@@ -30,7 +31,7 @@ UFS_HIDDEN int ufs_fd_pwrite_check(ufs_fd_t* ufs_restrict fd, const void* ufs_re
             if(writen == 0) return ENOSPC;
             _buf += writen;
             len -= writen;
-            off += writen;
+            off += ul_static_cast(int64_t, writen);
         } else if(ec != EAGAIN && ec != EWOULDBLOCK) return ec;
     }
     return 0;
@@ -54,8 +55,11 @@ UFS_HIDDEN int ufs_fd_copy(ufs_fd_t* fd, int64_t off_in, int64_t off_out, size_t
             if(ec) {
                 if(ec != EAGAIN && ec != EWOULDBLOCK) goto do_return;
             } else {
-                if(nread == 0) { ec = UFS_ERROR_READ_NOT_ENOUGH; goto do_return; }
-                else break;
+                if(nread == 0) {
+                    nread = len < cache_len ? len : cache_len;
+                    memset(cache, 0, nread);
+                }
+                break;
             }
         }
 
@@ -69,8 +73,8 @@ UFS_HIDDEN int ufs_fd_copy(ufs_fd_t* fd, int64_t off_in, int64_t off_out, size_t
             }
         }
 
-        off_in += nwrite;
-        off_out += nwrite;
+        off_in += ul_static_cast(int64_t, nwrite);
+        off_out += ul_static_cast(int64_t, nwrite);
         len -= nwrite;
     }
 
@@ -84,7 +88,7 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
     while(len > 1024) {
         ec = ufs_fd_pwrite_check(fd, zeros, sizeof(zeros), off);
         if(ul_unlikely(ec)) return ec;
-        off += sizeof(zeros);
+        off += ul_static_cast(int64_t, sizeof(zeros));
     }
     return ufs_fd_pwrite_check(fd, zeros, len, off);
 }
@@ -149,19 +153,12 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         fd = ul_reinterpret_cast(_fd_file_t*, ufs_realloc(NULL, sizeof(_fd_file_t)));
         if(ul_unlikely(fd == NULL)) return ENOMEM;
 
-        err = ulfd_open(&fd->fd, path, ULFD_O_RDWR, 0664);
+        err = ulfd_open(&fd->fd, path, ULFD_O_RDWR | ULFD_O_CREAT, 0664);
         if(err) { ufs_free(fd); return err; }
 
         // 锁定文件，避免第二个进程进行读写
         err = ulfd_lock(fd->fd, 0, UFS_BNUM_START * UFS_BLOCK_SIZE, ULFD_F_WRLCK);
         if(err) { ulfd_close(fd->fd); ufs_free(fd); return err; }
-
-        { // 检查文件大小是否是整块数
-            ulfd_stat_t stat;
-            err = ulfd_stat(path, &stat);
-            if(ul_unlikely(err)) return err;
-            if(stat.size % UFS_BLOCK_SIZE != 0) { ulfd_close(fd->fd); ufs_free(fd); return UFS_ERROR_BROKEN_DISK; }
-        }
 
         fd->b.type = _fd_file_type;
         fd->b.close = &_fd_file_close;
