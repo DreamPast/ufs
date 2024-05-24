@@ -133,9 +133,9 @@ UFS_HIDDEN int ufs_fix_jornal(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict 
 
     case 0xA: case 0x5:
         // 非法中间状态
-        return UFS_ERROR_BROKEN_DISK;
+        return -1;
     }
-    return UFS_ERROR_BROKEN_DISK;
+    return -1;
 }
 
 UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_fd_t* ufs_restrict fd) {
@@ -147,46 +147,40 @@ UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_fd_t* ufs_
 UFS_HIDDEN void ufs_jornal_deinit(ufs_jornal_t* jornal) {
     int i;
     for(i = jornal->num - 1; i >= 0; --i)
-        if(jornal->flag[i] & _UFS_JORNAL_ADD_ALLOC) {
-            ufs_free(ufs_const_cast(void*, jornal->ops[i].buf));
-        }
+        ufs_free(ufs_const_cast(void*, jornal->ops[i].buf));
     jornal->num = 0;
 }
 
-UFS_HIDDEN void ufs_jornal_merge_nolock(ufs_jornal_t* jornal) {
+static void _jornal_merge(ufs_jornal_t* jornal, int x) {
     int i, j;
     const int n = jornal->num;
-    for(i = n - 1; i >= 0; --i)
+    for(i = n - 1; i >= x; --i)
         for(j = i - 1; j >= 0; --j)
             if(jornal->ops[i].bnum == jornal->ops[j].bnum) {
-                if(jornal->flag[j] & _UFS_JORNAL_ADD_ALLOC) ufs_free(ufs_const_cast(void*, jornal->ops[j].buf));
+                ufs_free(ufs_const_cast(void*, jornal->ops[j].buf));
                 jornal->ops[j].buf = jornal->ops[i].buf;
-                jornal->flag[j] = jornal->flag[i];
                 jornal->ops[i].buf = NULL;
                 break;
             }
-    for(i = 0, j = 0; i < n; ++i) {
-        if(jornal->ops[i].buf != NULL) {
-            jornal->ops[j] = jornal->ops[i];
-            jornal->flag[j] = jornal->flag[i];
-            ++j;
-        }
-    }
+    for(i = x, j = x; i < n; ++i)
+        if(jornal->ops[i].buf != NULL)
+            jornal->ops[j++] = jornal->ops[i];
     jornal->num = j;
 }
-UFS_HIDDEN int ufs_jornal_sync_nolock(ufs_jornal_t* jornal) {
+static void ufs_jornal_merge_nolock(ufs_jornal_t* jornal) {
+    _jornal_merge(jornal, 0);
+}
+static int ufs_jornal_sync_nolock(ufs_jornal_t* jornal) {
     int ec, i;
     ufs_jornal_merge_nolock(jornal);
     ec = ufs_do_jornal(jornal->fd, jornal->ops, jornal->num);
     if(ul_unlikely(ec)) return ec;
-    for(i = jornal->num - 1; i >= 0; --i) 
-        if(jornal->flag[i] & _UFS_JORNAL_ADD_ALLOC) {
-            ufs_free(ufs_const_cast(void*, jornal->ops[i].buf));
-        }
+    for(i = jornal->num - 1; i >= 0; --i)
+        ufs_free(ufs_const_cast(void*, jornal->ops[i].buf));
     jornal->num = 0;
     return 0;
 }
-UFS_HIDDEN int ufs_jornal_read_block_nolock(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum) {
+static int ufs_jornal_read_block_nolock(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum) {
     int i;
     for(i = jornal->num - 1; i >= 0; --i)
         if(jornal->ops[i].bnum == bnum) {
@@ -195,7 +189,7 @@ UFS_HIDDEN int ufs_jornal_read_block_nolock(ufs_jornal_t* ufs_restrict jornal, v
         }
     return ufs_fd_pread_check(jornal->fd, buf, UFS_BLOCK_SIZE, ufs_fd_offset(bnum));
 }
-UFS_HIDDEN int ufs_jornal_read_nolock(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
+static int ufs_jornal_read_nolock(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
     int i;
     for(i = jornal->num - 1; i >= 0; --i)
         if(jornal->ops[i].bnum == bnum) {
@@ -204,7 +198,7 @@ UFS_HIDDEN int ufs_jornal_read_nolock(ufs_jornal_t* ufs_restrict jornal, void* u
         }
     return ufs_fd_pread_check(jornal->fd, buf, len, ufs_fd_offset2(bnum, off));
 }
-UFS_HIDDEN int ufs_jornal_add_nolock(ufs_jornal_t* jornal, const void* ufs_restrict buf, uint64_t bnum, int flag) {
+static int ufs_jornal_add_block_nolock(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, int flag) {
     if(ul_unlikely(jornal->num == UFS_JORNAL_NUM)) {
         int ec = ufs_jornal_sync_nolock(jornal);
         if(ul_unlikely(ec)) {
@@ -213,9 +207,6 @@ UFS_HIDDEN int ufs_jornal_add_nolock(ufs_jornal_t* jornal, const void* ufs_restr
         }
     }
     switch(flag) {
-    case UFS_JORNAL_ADD_REF:
-        jornal->ops[jornal->num].buf = buf;
-        break;
     case UFS_JORNAL_ADD_COPY:
         jornal->ops[jornal->num].buf = ufs_malloc(UFS_BLOCK_SIZE);
         if(ul_unlikely(jornal->ops[jornal->num].buf == NULL)) return ENOMEM;
@@ -227,11 +218,36 @@ UFS_HIDDEN int ufs_jornal_add_nolock(ufs_jornal_t* jornal, const void* ufs_restr
     default:
         return EINVAL;
     }
-    jornal->flag[jornal->num] = flag;
     jornal->ops[jornal->num].bnum = bnum;
     ++jornal->num;
     return 0;
 }
+static int ufs_jornal_add_nolock(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag) {
+    int ec;
+    char* tmp;
+    tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
+    if(ul_unlikely(tmp == NULL)) { ec = ENOMEM; goto do_return; }
+    ec = ufs_jornal_read_block_nolock(jornal, tmp, bnum);
+    if(ul_unlikely(ec)) { ufs_free(tmp); goto do_return; }
+    memcpy(tmp + off, buf, len);
+    ec = ufs_jornal_add_block_nolock(jornal, tmp, bnum, UFS_JORNAL_ADD_MOVE);
+do_return:
+    if(flag == UFS_JORNAL_ADD_MOVE) ufs_free(ufs_const_cast(void*, buf));
+    return ec;
+}
+static int ufs_jornal_append_nolock(ufs_jornal_t* ufs_restrict jornal, ufs_jornal_op_t* ufs_restrict ops, int num) {
+    if(jornal->num + num > UFS_JORNAL_NUM) {
+        int ec = ufs_jornal_sync_nolock(jornal);
+        if(ul_unlikely(ec)) return ec;
+    }
+    memcpy(jornal->ops + jornal->num, ops, ul_static_cast(size_t, num) * sizeof(ops[0]));
+    jornal->num += num;
+    _jornal_merge(jornal, jornal->num);
+    return 0;
+}
+
+static void ufs_jornal_lock(ufs_jornal_t* jornal) { ulatomic_spinlock_lock(&jornal->lock); }
+static void ufs_jornal_unlock(ufs_jornal_t* jornal) { ulatomic_spinlock_unlock(&jornal->lock); }
 
 UFS_HIDDEN void ufs_jornal_merge(ufs_jornal_t* jornal) {
     ufs_jornal_lock(jornal);
@@ -259,151 +275,24 @@ UFS_HIDDEN int ufs_jornal_sync(ufs_jornal_t* jornal) {
     ufs_jornal_unlock(jornal);
     return ec;
 }
-UFS_HIDDEN int ufs_jornal_add(ufs_jornal_t* jornal, const void* ufs_restrict buf, uint64_t bnum, int flag) {
+UFS_HIDDEN int ufs_jornal_add(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag) {
     int ec;
     ufs_jornal_lock(jornal);
-    ec = ufs_jornal_add_nolock(jornal, buf, bnum, flag);
+    ec = ufs_jornal_add_nolock(jornal, buf, bnum, off, len, flag);
     ufs_jornal_unlock(jornal);
     return ec;
 }
-
-
-UFS_HIDDEN int ufs_transcation_init(ufs_transcation_t* ufs_restrict transcation, ufs_jornal_t* ufs_restrict jornal) {
-    transcation->jornal = jornal;
-    transcation->num = 0;
-    return 0;
-}
-UFS_HIDDEN void ufs_transcation_deinit(ufs_transcation_t* transcation) {
-    ufs_transcation_settop(transcation, 0);
-}
-
-UFS_HIDDEN int ufs_transcation_nolock_add(ufs_transcation_t* ufs_restrict transcation, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag) {
+UFS_HIDDEN int ufs_jornal_add_block(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, int flag) {
     int ec;
-    char* tmp;
-    tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(tmp == NULL)) { ec = ENOMEM; goto do_return; }
-    ec = ufs_transcation_nolock_read_block(transcation, tmp, bnum);
-    if(ul_unlikely(ec)) { ufs_free(tmp); goto do_return; }
-    memcpy(tmp + off, buf, len);
-    ec = ufs_transcation_nolock_add_block(transcation, tmp, bnum, UFS_JORNAL_ADD_MOVE);
-do_return:
-    if(flag == UFS_JORNAL_ADD_REF) ufs_free(ufs_const_cast(void*, buf));
+    ufs_jornal_lock(jornal);
+    ec = ufs_jornal_add_block_nolock(jornal, buf, bnum, flag);
+    ufs_jornal_unlock(jornal);
     return ec;
 }
-UFS_HIDDEN int ufs_transcation_nolock_add_block(ufs_transcation_t* ufs_restrict transcation, const void* ufs_restrict buf, uint64_t bnum, int flag) {
-    if(ul_unlikely(transcation->num == UFS_JORNAL_NUM)) {
-        if(flag == UFS_JORNAL_ADD_MOVE) ufs_free(ufs_const_cast(void*, buf));
-        return ERANGE;
-    }
-    switch(flag) {
-    case UFS_JORNAL_ADD_REF:
-        transcation->ops[transcation->num].buf = buf;
-        break;
-    case UFS_JORNAL_ADD_COPY:
-        transcation->ops[transcation->num].buf = ufs_malloc(UFS_BLOCK_SIZE);
-        if(ul_unlikely(transcation->ops[transcation->num].buf == NULL)) return ENOMEM;
-        memcpy(ufs_const_cast(void*, transcation->ops[transcation->num].buf), buf, UFS_BLOCK_SIZE);
-        break;
-    case UFS_JORNAL_ADD_MOVE:
-        transcation->ops[transcation->num].buf = buf;
-        break;
-    default:
-        return EINVAL;
-    }
-    transcation->flag[transcation->num] = flag;
-    transcation->ops[transcation->num].bnum = bnum;
-    ++transcation->num;
-    return 0;
-}
-UFS_HIDDEN int ufs_transcation_nolock_add_zero_block(ufs_transcation_t* transcation, uint64_t bnum) {
-    char* tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(tmp == NULL)) return ENOMEM;
-    memset(tmp, 0, UFS_BLOCK_SIZE);
-    return ufs_transcation_nolock_add_block(transcation, tmp, bnum, UFS_JORNAL_ADD_MOVE);
-}
-UFS_HIDDEN int ufs_transcation_nolock_add_zero(ufs_transcation_t* transcation, uint64_t bnum, size_t off, size_t len) {
+UFS_HIDDEN int ufs_jornal_append(ufs_jornal_t* ufs_restrict jornal, ufs_jornal_op_t* ufs_restrict ops, int num) {
     int ec;
-    char* tmp;
-    tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(tmp == NULL)) return ENOMEM;
-    ec = ufs_transcation_nolock_read_block(transcation, tmp, bnum);
-    if(ul_unlikely(ec)) { ufs_free(tmp); return ec; }
-    memset(tmp + off, 0, len);
-    return ufs_transcation_nolock_add_block(transcation, tmp, bnum, UFS_JORNAL_ADD_MOVE);
-}
-UFS_HIDDEN int ufs_transcation_nolock_read_block(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum) {
-    return ufs_jornal_read_block_nolock(transcation->jornal, buf, bnum);
-}
-UFS_HIDDEN int ufs_transcation_nolock_read(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
-    return ufs_jornal_read_nolock(transcation->jornal, buf, bnum, off, len);
-}
-UFS_HIDDEN int ufs_transcation_nolock_commit(ufs_transcation_t* transcation, int num) {
-    if(transcation->jornal->num + num > UFS_JORNAL_NUM) {
-        int ec = ufs_jornal_sync_nolock(transcation->jornal);
-        if(ul_unlikely(ec)) return ec;
-    }
-    memcpy(transcation->jornal->ops + transcation->jornal->num, transcation->ops, ul_static_cast(size_t, transcation->num) * sizeof(transcation->ops[0]));
-    memcpy(transcation->jornal->flag + transcation->jornal->num, transcation->flag, ul_static_cast(size_t, transcation->num) * sizeof(transcation->flag[0]));
-    transcation->jornal->num += transcation->num;
-    ufs_jornal_merge_nolock(transcation->jornal);
-    transcation->num = 0;
-    return 0;
-}
-UFS_HIDDEN int ufs_transcation_nolock_commit_all(ufs_transcation_t* transcation) {
-    return ufs_transcation_nolock_commit(transcation, transcation->num);
-}
-
-UFS_HIDDEN int ufs_transcation_add(ufs_transcation_t* ufs_restrict transcation, const void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len, int flag) {
-    int ec;
-    char* tmp;
-    tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(tmp == NULL)) { ec = ENOMEM; goto do_return; }
-    ec = ufs_transcation_read_block(transcation, tmp, bnum);
-    if(ul_unlikely(ec)) { ufs_free(tmp); goto do_return; }
-    memcpy(tmp + off, buf, len);
-    ec = ufs_transcation_add_block(transcation, tmp, bnum, UFS_JORNAL_ADD_MOVE);
-do_return:
-    if(flag == UFS_JORNAL_ADD_REF) ufs_free(ufs_const_cast(void*, buf));
+    ufs_jornal_lock(jornal);
+    ec = ufs_jornal_append_nolock(jornal, ops, num);
+    ufs_jornal_unlock(jornal);
     return ec;
-}
-UFS_HIDDEN int ufs_transcation_add_block(ufs_transcation_t* ufs_restrict transcation, const void* ufs_restrict buf, uint64_t bnum, int flag) {
-    return ufs_transcation_nolock_add_block(transcation, buf, bnum, flag);
-}
-UFS_HIDDEN int ufs_transcation_add_zero_block(ufs_transcation_t* transcation, uint64_t bnum) {
-    return ufs_transcation_nolock_add_zero_block(transcation, bnum);
-}
-UFS_HIDDEN int ufs_transcation_add_zero(ufs_transcation_t* transcation, uint64_t bnum, size_t off, size_t len) {
-    int ec;
-    char* tmp;
-    tmp = ul_reinterpret_cast(char*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(tmp == NULL)) return ENOMEM;
-    ec = ufs_transcation_read_block(transcation, tmp, bnum);
-    if(ul_unlikely(ec)) { ufs_free(tmp); return ec; }
-    memset(tmp + off, 0, len);
-    return ufs_transcation_add_block(transcation, tmp, bnum, UFS_JORNAL_ADD_MOVE);
-}
-UFS_HIDDEN int ufs_transcation_read_block(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum) {
-    return ufs_jornal_read_block(transcation->jornal, buf, bnum);
-}
-UFS_HIDDEN int ufs_transcation_read(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
-    return ufs_jornal_read(transcation->jornal, buf, bnum, off, len);
-}
-UFS_HIDDEN int ufs_transcation_commit(ufs_transcation_t* transcation, int num) {
-    int ec;
-    ufs_jornal_lock(transcation->jornal);
-    ec = ufs_transcation_nolock_commit(transcation, num);
-    ufs_jornal_unlock(transcation->jornal);
-    return ec;
-}
-UFS_HIDDEN int ufs_transcation_commit_all(ufs_transcation_t* transcation) {
-    return ufs_transcation_commit(transcation, transcation->num);
-}
-UFS_HIDDEN void ufs_transcation_settop(ufs_transcation_t* transcation, int top) {
-    int i;
-    ufs_assert(top <= transcation->num);
-    for(i = top; i < transcation->num; ++i)
-        if(transcation->flag[i] & _UFS_JORNAL_ADD_ALLOC) {
-            ufs_free(ufs_const_cast(void*, transcation->ops[i].buf));
-        }
-    transcation->num = top;
 }

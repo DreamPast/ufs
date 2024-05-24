@@ -35,7 +35,7 @@
     #if __has_builtin(__builtin_assume)
         #define ufs_assume(cond) __builtin_assume(cond)
     #endif
-    #if __has_builtin(__builtin_unreachable)
+    #if !defined(ufs_assume) && __has_builtin(__builtin_unreachable)
         #if __has_builtin(__builtin_expect)
             #define ufs_assume(cond) (__builtin_expect(!(cond), 0) ? __builtin_unreachable() : (void)0)
         #else
@@ -61,7 +61,6 @@
 
 #include "libufs.h"
 #include "ulatomic.h"
-#include "ulmtx.h"
 
 #include <stddef.h>
 

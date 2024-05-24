@@ -25,25 +25,8 @@
 extern "C" {
 #endif
 
-
-/**
- * 错误代码
- *
- * 部分代码我们难以准确地使用Unix style的error code表示，因此我们使用负数来表示这些错误
- * 如果你确实需要统一使用Unix Style的error code，可以使用ufs_uniform_error函数。
-*/
-
-// 错误：未知错误
-#define UFS_ERROR_UNKOWN -1
-// 错误：无法读入足够的字节（这通常是因为遇到了EOF，但是我们的磁盘文件是对齐BLOCK_SIZE的，这个不应当发生）
-#define UFS_ERROR_READ_NOT_ENOUGH -2
-// 错误：磁盘已损坏（这通常是因为磁盘文件被外部程序进行了不正确的修改）
-#define UFS_ERROR_BROKEN_DISK -3
-
-// 获得error对应的解释字符串，对于Unix style的error code，这将直接使用系统的错误信息
+// 获得error对应的解释字符串
 UFS_API const char* ufs_strerror(int error);
-// 将文件系统的自定义错误统一到Unix Style的error code
-UFS_API int ufs_uniform_error(int error);
 
 UFS_API int32_t ufs_getuid(void);
 UFS_API int32_t ufs_getgid(void);
@@ -93,11 +76,11 @@ UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
 #define UFS_MAGIC1 (67) // 魔数1
 #define UFS_MAGIC2 (74) // 魔数2
 
-#define UFS_NAME_MAX (64-1) // 目录最大名称长度（建议为2的指数-1）
+#define UFS_NAME_MAX (64 - 8 - 1) // 目录最大名称长度
 #define UFS_BLOCK_SIZE (1024) // 块的大小（必须是2的指数）
 #define UFS_INODE_DEFAULT_RATIO (16*1024) // inode的默认比值（每16KB添加一个inode）
 
-#define UFS_JORNAL_NUM 32 // 最大日志数量
+#define UFS_JORNAL_NUM (UFS_BLOCK_SIZE / 8 - 6) // 最大日志数量
 
 #define UFS_BNUM_COMPACT (0) // 块号：兼容块（不使用此块，以便兼容BIOS/UEFI）
 #define UFS_BNUM_SB (1) // 块号：超级块
@@ -170,6 +153,9 @@ UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
 
 #define UFS_O_DENYRD    (1l << 24) // 打开：阻止其它应用进行读取
 #define UFS_O_DENYWR    (1l << 24) // 打开：阻止其它应用进行写入
+
+struct ufs_file_t;
+typedef struct ufs_file_t ufs_file_t;
 
 
 

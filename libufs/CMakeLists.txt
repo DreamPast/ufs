@@ -11,10 +11,11 @@ option(LIBUFS_NO_THREAD_SAFE "关闭多线程安全" OFF)
 
 add_library(
 	libufs
-	libufs_internel.c
 	libufs_thread.c
+	libufs_internel.c
 	libufs_fd.c
 	libufs_jornal.c
+	libufs_transcation.c
 	libufs_zlist.c
 	libufs_ilist.c
 	libufs_minode.c

@@ -1,29 +1,7 @@
 #include "libufs_internel.h"
 
 UFS_API const char* ufs_strerror(int error) {
-    static const char* TABLE[] = {
-        "unknown error",
-        "bytes read are not enough",
-        "broken disk"
-    };
-    static size_t TABLE_NUM = sizeof(TABLE) / sizeof(TABLE[0]);
-    if(error >= 0) return strerror(error);
-    error = -(error + 1);
-    if(error >= ul_static_cast(int, TABLE_NUM))
-        return "illegal error code";
-    else return TABLE[error];
-}
-
-UFS_API int ufs_union_error(int error) {
-    static int TABLE[] = {
-        EINVAL
-    };
-    static size_t TABLE_NUM = sizeof(TABLE) / sizeof(TABLE[0]);
-    if(error >= 0) return error;
-    error = -(error + 1);
-    if(error >= ul_static_cast(int, TABLE_NUM))
-        return EINVAL;
-    else return TABLE[error];
+    return strerror(error);
 }
 
 // 在Windows上，我们无法准确地实现UID和GID

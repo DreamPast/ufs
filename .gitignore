@@ -1,3 +1,9 @@
-*/build
-*/.vscode
-*/CMakeSettings.json
+build
+
+# Visual Studio Code
+.vscode
+CMakeSettings.json
+
+# Visual Studio
+.vs
+out

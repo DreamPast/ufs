@@ -175,7 +175,8 @@ UFS_HIDDEN int ufs_ilist_push(ufs_ilist_t* ilist, uint64_t inum) {
     if(n == UFS_ILIST_CACHE_LIST_LIMIT) { // 内存中空间不足，我们写回链表
         ec = _write_multi_ilist(&ilist->now, ilist->transcation, 0, UFS_ILIST_CACHE_LIST_LIMIT);
         if(ul_unlikely(ec)) return ec;
-        memmove(ilist->now.item, ilist->now.item + UFS_ILIST_CACHE_LIST_LIMIT / 2, UFS_ILIST_CACHE_LIST_LIMIT);
+        memmove(ilist->now.item, ilist->now.item + UFS_ILIST_CACHE_LIST_LIMIT / 2,
+            (UFS_ILIST_CACHE_LIST_LIMIT - UFS_ILIST_CACHE_LIST_LIMIT / 2) / 2 * sizeof(ilist->now.item[0]));
         n = UFS_ILIST_CACHE_LIST_LIMIT / 2;
     }
     ilist->now.item[n - 1].inum = ilist->now.item[n].next = inum;
