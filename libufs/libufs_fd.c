@@ -44,10 +44,10 @@ UFS_HIDDEN int ufs_fd_copy(ufs_fd_t* fd, int64_t off_in, int64_t off_out, size_t
 
     while(cache_len) {
         cache = ul_reinterpret_cast(char*, ufs_malloc(cache_len));
-        if(ul_likely(cache != NULL)) break;
+        if(ufs_likely(cache != NULL)) break;
         cache_len >>= 1;
     }
-    if(ul_unlikely(cache_len == 0)) return ENOMEM;
+    if(ufs_unlikely(cache_len == 0)) return ENOMEM;
 
     while(len) {
         for(;;) {
@@ -87,7 +87,7 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
     static const char zeros[1024] = { 0 };
     while(len > 1024) {
         ec = ufs_fd_pwrite_check(fd, zeros, sizeof(zeros), off);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         off += ul_static_cast(int64_t, sizeof(zeros));
     }
     return ufs_fd_pwrite_check(fd, zeros, len, off);
@@ -116,7 +116,7 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         do {
             ulfd_int64_t off;
             int err = ulfd_seek(_fd->fd, off, ULFD_SEEK_SET, &off);
-            if(ul_unlikely(err)) return err;
+            if(ufs_unlikely(err)) return err;
             return ulfd_read(_fd->fd, buf, len, pread);
         } while(0);
         ulatomic_spinlock_unlock(&_fd->lock);
@@ -131,7 +131,7 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         do {
             ulfd_int64_t off;
             int err = ulfd_seek(_fd->fd, off, ULFD_SEEK_SET, &off);
-            if(ul_unlikely(err)) return err;
+            if(ufs_unlikely(err)) return err;
             return ulfd_write(_fd->fd, buf, len, pwriten);
         } while(0);
         ulatomic_spinlock_unlock(&_fd->lock);
@@ -148,10 +148,10 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         _fd_file_t* fd;
         int err;
 
-        if(ul_unlikely(pfd == NULL || path == NULL)) return EINVAL;
+        if(ufs_unlikely(pfd == NULL || path == NULL)) return EINVAL;
 
         fd = ul_reinterpret_cast(_fd_file_t*, ufs_realloc(NULL, sizeof(_fd_file_t)));
-        if(ul_unlikely(fd == NULL)) return ENOMEM;
+        if(ufs_unlikely(fd == NULL)) return ENOMEM;
 
         err = ulfd_open(&fd->fd, path, ULFD_O_RDWR | ULFD_O_CREAT, 0664);
         if(err) { ufs_free(fd); return err; }
@@ -219,7 +219,7 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         if(off < 0) { ec = EINVAL; goto do_return; }
         if(ul_static_cast(size_t, off) + len > fd->len) {
             new_memory = ul_realloc(fd->memory, ul_static_cast(size_t, off) + len);
-            if(ul_unlikely(new_memory == NULL)) { ec = ENOSPC; goto do_return; }
+            if(ufs_unlikely(new_memory == NULL)) { ec = ENOSPC; goto do_return; }
             fd->memory = new_memory;
             fd->len = ul_static_cast(size_t, off) + len;
         }
@@ -238,11 +238,11 @@ UFS_HIDDEN int ufs_fd_pwrite_zeros(ufs_fd_t* fd, size_t len, int64_t off) {
         _fd_memory_t* fd;
         char* mem;
 
-        if(ul_unlikely(pfd == NULL)) return EINVAL;
+        if(ufs_unlikely(pfd == NULL)) return EINVAL;
         fd = ul_reinterpret_cast(_fd_memory_t*, ufs_malloc(sizeof(_fd_memory_t)));
-        if(ul_unlikely(fd == NULL)) return ENOMEM;
+        if(ufs_unlikely(fd == NULL)) return ENOMEM;
         mem = ul_reinterpret_cast(char*, ufs_malloc(len));
-        if(ul_unlikely(mem == NULL)) { ufs_free(fd); return ENOMEM; }
+        if(ufs_unlikely(mem == NULL)) { ufs_free(fd); return ENOMEM; }
 
         if(src) memcpy(mem, src, len);
         else memset(mem, 0, len);

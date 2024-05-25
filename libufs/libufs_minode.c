@@ -26,7 +26,7 @@ static int _read_inode(ufs_t* ufs, ufs_inode_t* inode, uint64_t inum) {
     int ec;
     ec = ufs_jornal_read(&ufs->jornal, inode, inum / UFS_INODE_PER_BLOCK,
         (inum % UFS_INODE_PER_BLOCK) * UFS_INODE_DISK_SIZE, UFS_INODE_MEMORY_SIZE);
-    if(ul_unlikely(ec)) goto do_return;
+    if(ufs_unlikely(ec)) goto do_return;
 
     _trans_inode(inode, inode);
 
@@ -36,7 +36,7 @@ do_return:
 // 将inode提交到事务中
 static int _write_inode(ufs_transcation_t* transcation, ufs_inode_t* inode, uint64_t inum) {
     ufs_inode_t* d = ul_reinterpret_cast(ufs_inode_t*, ufs_malloc(UFS_INODE_DISK_SIZE));
-    if(ul_unlikely(d == NULL)) return ENOMEM;
+    if(ufs_unlikely(d == NULL)) return UFS_ENOMEM;
     memset(ul_reinterpret_cast(char*, d) + UFS_INODE_MEMORY_SIZE, 0, UFS_INODE_DISK_SIZE - UFS_INODE_MEMORY_SIZE);
     _trans_inode(d, inode);
     return ufs_transcation_add(transcation, d, inum / UFS_INODE_PER_BLOCK,
@@ -44,7 +44,7 @@ static int _write_inode(ufs_transcation_t* transcation, ufs_inode_t* inode, uint
 }
 static int _write_inode_direct(ufs_jornal_t* jornal, ufs_inode_t* inode, uint64_t inum) {
     ufs_inode_t* d = ul_reinterpret_cast(ufs_inode_t*, ufs_malloc(UFS_INODE_DISK_SIZE));
-    if(ul_unlikely(d == NULL)) return ENOMEM;
+    if(ufs_unlikely(d == NULL)) return UFS_ENOMEM;
     memset(ul_reinterpret_cast(char*, d) + UFS_INODE_MEMORY_SIZE, 0, UFS_INODE_DISK_SIZE - UFS_INODE_MEMORY_SIZE);
     _trans_inode(d, inode);
     return ufs_jornal_add(jornal, d, inum / UFS_INODE_PER_BLOCK,
@@ -62,64 +62,64 @@ static int _seek_zone(ufs_minode_t* inode, uint64_t block, uint64_t* pznum) {
     }
     block -= 12;
 
-    if(block < UFS_ZNUM_PER_BLOCK * 2) {
+    if(block < UFS_ZONE_PER_BLOCK * 2) {
         uint64_t bnum;
-        if(block < UFS_ZNUM_PER_BLOCK) {
+        if(block < UFS_ZONE_PER_BLOCK) {
             bnum = inode->inode.zones[12];
         } else {
             bnum = inode->inode.zones[13];
-            block -= UFS_ZNUM_PER_BLOCK;
+            block -= UFS_ZONE_PER_BLOCK;
         }
         if(bnum == 0) { *pznum = 0; return 0; }
         ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, block * 8, sizeof(bnum));
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         *pznum = ul_trans_u64_le(bnum);
         return 0;
     }
-    block -= UFS_ZNUM_PER_BLOCK * 2;
+    block -= UFS_ZONE_PER_BLOCK * 2;
 
-    if(block < UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK) {
+    if(block < UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK) {
         uint64_t bnum = inode->inode.zones[14];
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block / UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
-        if(ul_unlikely(ec)) return ec;
+        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block / UFS_ZONE_PER_BLOCK) * 8, sizeof(bnum));
+        if(ufs_unlikely(ec)) return ec;
         bnum = ul_trans_u64_le(bnum);
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block % UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
-        if(ul_unlikely(ec)) return ec;
+        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block % UFS_ZONE_PER_BLOCK) * 8, sizeof(bnum));
+        if(ufs_unlikely(ec)) return ec;
         bnum = ul_trans_u64_le(bnum);
 
         *pznum = ul_trans_u64_le(bnum);
         return 0;
     }
-    block -= UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK;
+    block -= UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK;
 
-    if(block < UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK) {
+    if(block < UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK) {
         uint64_t bnum = inode->inode.zones[15];
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block / (UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK)) * 8, sizeof(bnum));
-        if(ul_unlikely(ec)) return ec;
-        block %= UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK;
+        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block / (UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK)) * 8, sizeof(bnum));
+        if(ufs_unlikely(ec)) return ec;
+        block %= UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK;
         bnum = ul_trans_u64_le(bnum);
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block / UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
-        if(ul_unlikely(ec)) return ec;
+        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block / UFS_ZONE_PER_BLOCK) * 8, sizeof(bnum));
+        if(ufs_unlikely(ec)) return ec;
         bnum = ul_trans_u64_le(bnum);
 
         if(bnum == 0) { *pznum = 0; return 0; }
-        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block % UFS_ZNUM_PER_BLOCK) * 8, sizeof(bnum));
-        if(ul_unlikely(ec)) return ec;
+        ec = ufs_jornal_read(&inode->ufs->jornal, &bnum, bnum, (block % UFS_ZONE_PER_BLOCK) * 8, sizeof(bnum));
+        if(ufs_unlikely(ec)) return ec;
         bnum = ul_trans_u64_le(bnum);
 
         *pznum = ul_trans_u64_le(bnum);
         return 0;
     }
 
-    return ERANGE;
+    return UFS_EOVERFLOW;
 }
 
 
@@ -127,9 +127,9 @@ static int _seek_zone(ufs_minode_t* inode, uint64_t block, uint64_t* pznum) {
 static int __end_zlist(ufs_minode_t* ufs_restrict inode, ufs_transcation_t* ufs_restrict transcation) {
     int ec;
     ec = ufs_zlist_sync(&inode->ufs->zlist);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     ec = _write_inode(transcation, &inode->inode, inode->inum);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     ec = ufs_transcation_commit_all(transcation);
     return ec;
 }
@@ -143,11 +143,11 @@ static int __prealloc_zone1(ufs_minode_t* ufs_restrict inode, ufs_t* ufs_restric
     ufs_zlist_lock(&ufs->zlist, &transcation);
 
     ec = ufs_zlist_pop(&ufs->zlist, &inode->inode.zones[zk]);
-    if(ul_unlikely(ec)) goto do_return;
+    if(ufs_unlikely(ec)) goto do_return;
     ec = ufs_transcation_add_zero_block(&transcation, inode->inode.zones[zk]);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
     ec = __end_zlist(inode, &transcation);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
     ++inode->inode.blocks;
     goto do_return;
 
@@ -172,30 +172,30 @@ static int __prealloc_zone2(ufs_minode_t* ufs_restrict inode, ufs_t* ufs_restric
     nz[0] = oz[0] = inode->inode.zones[zk];
     if(oz[0] == 0) {
         ec = ufs_zlist_pop(&ufs->zlist, nz + 0);
-        if(ul_unlikely(ec)) goto do_return;
+        if(ufs_unlikely(ec)) goto do_return;
         ++inode->inode.blocks;
         ec = ufs_transcation_add_zero_block(&transcation, nz[0]);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         oz[1] = 0;
     } else {
         ec = ufs_transcation_read(&transcation, oz + 1, nz[0], k * 8, 8);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         nz[1] = oz[1] = ul_trans_u64_le(oz[1]);
     }
 
     if(oz[1] == 0) {
         ec = ufs_zlist_pop(&ufs->zlist, nz + 1);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         ++inode->inode.blocks;
         nz[1] = ul_trans_u64_le(nz[1]);
         ec = ufs_transcation_add(&transcation, nz + 1, nz[0], k * 8, 8, UFS_JORNAL_ADD_COPY);
         nz[1] = ul_trans_u64_le(nz[1]);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         ec = ufs_transcation_add_zero_block(&transcation, nz[1]);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
     }
     ec = __end_zlist(inode, &transcation);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
     goto do_return;
 
 fail_to_alloc:
@@ -221,47 +221,47 @@ static int __prealloc_zone3(ufs_minode_t* ufs_restrict inode, ufs_t* ufs_restric
     nz[0] = oz[0] = inode->inode.zones[zk];
     if(oz[0] == 0) {
         ec = ufs_zlist_pop(&ufs->zlist, nz + 0);
-        if(ul_unlikely(ec)) goto do_return;
+        if(ufs_unlikely(ec)) goto do_return;
         ++inode->inode.blocks;
         ec = ufs_transcation_add_zero_block(&transcation, nz[0]);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         oz[1] = 0;
     } else {
-        ec = ufs_transcation_read(&transcation, oz + 1, nz[0], (k / UFS_ZNUM_PER_BLOCK) * 8, 8);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        ec = ufs_transcation_read(&transcation, oz + 1, nz[0], (k / UFS_ZONE_PER_BLOCK) * 8, 8);
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         nz[1] = oz[1] = ul_trans_u64_le(oz[1]);
     }
 
     if(oz[1] == 0) {
         ec = ufs_zlist_pop(&ufs->zlist, nz + 1);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         ++inode->inode.blocks;
         nz[1] = ul_trans_u64_le(nz[1]);
-        ec = ufs_transcation_add(&transcation, nz + 1, nz[0], (k / UFS_ZNUM_PER_BLOCK) * 8, 8, UFS_JORNAL_ADD_COPY);
+        ec = ufs_transcation_add(&transcation, nz + 1, nz[0], (k / UFS_ZONE_PER_BLOCK) * 8, 8, UFS_JORNAL_ADD_COPY);
         nz[1] = ul_trans_u64_le(nz[1]);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         ec = ufs_transcation_add_zero_block(&transcation, nz[1]);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         oz[2] = 0;
     } else {
-        ec = ufs_transcation_read(&transcation, oz + 2, nz[1], (k % UFS_ZNUM_PER_BLOCK) * 8, 8);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        ec = ufs_transcation_read(&transcation, oz + 2, nz[1], (k % UFS_ZONE_PER_BLOCK) * 8, 8);
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         nz[2] = oz[2] = ul_trans_u64_le(oz[2]);
     }
 
     if(oz[2] == 0) {
         ec = ufs_zlist_pop(&ufs->zlist, nz + 2);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         ++inode->inode.blocks;
         nz[2] = ul_trans_u64_le(nz[2]);
-        ec = ufs_transcation_add(&transcation, nz + 2, nz[1], (k % UFS_ZNUM_PER_BLOCK) * 8, 8, UFS_JORNAL_ADD_COPY);
+        ec = ufs_transcation_add(&transcation, nz + 2, nz[1], (k % UFS_ZONE_PER_BLOCK) * 8, 8, UFS_JORNAL_ADD_COPY);
         nz[2] = ul_trans_u64_le(nz[2]);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
         ec = ufs_transcation_add_zero_block(&transcation, nz[2]);
-        if(ul_unlikely(ec)) goto fail_to_alloc;
+        if(ufs_unlikely(ec)) goto fail_to_alloc;
     }
     ec = __end_zlist(inode, &transcation);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
     goto do_return;
 
 fail_to_alloc:
@@ -278,20 +278,20 @@ do_return:
 }
 static int _prealloc_zone(ufs_minode_t* ufs_restrict inode, uint64_t block, uint64_t* ufs_restrict pblock) {
     block -= 12;
-    if(block < UFS_ZNUM_PER_BLOCK)
+    if(block < UFS_ZONE_PER_BLOCK)
         return __prealloc_zone1(inode, inode->ufs, 12, pblock);
-    block -= UFS_ZNUM_PER_BLOCK;
+    block -= UFS_ZONE_PER_BLOCK;
 
-    if(block < UFS_ZNUM_PER_BLOCK)
+    if(block < UFS_ZONE_PER_BLOCK)
         return __prealloc_zone1(inode, inode->ufs, 13, pblock);
-    block -= UFS_ZNUM_PER_BLOCK;
+    block -= UFS_ZONE_PER_BLOCK;
 
-    if(block < UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK)
-        return __prealloc_zone2(inode, inode->ufs, 14, block / UFS_ZNUM_PER_BLOCK, pblock);
-    block -= UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK;
+    if(block < UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK)
+        return __prealloc_zone2(inode, inode->ufs, 14, block / UFS_ZONE_PER_BLOCK, pblock);
+    block -= UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK;
 
-    if(block < UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK)
-        return __prealloc_zone3(inode, inode->ufs, 15, block / UFS_ZNUM_PER_BLOCK, pblock);
+    if(block < UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK)
+        return __prealloc_zone3(inode, inode->ufs, 15, block / UFS_ZONE_PER_BLOCK, pblock);
     return 0;
 }
 
@@ -304,9 +304,9 @@ static int __alloc_zone_0(ufs_minode_t* ufs_restrict inode, ufs_t* ufs_restrict 
     ufs_zlist_lock(&ufs->zlist, &transcation);
 
     ec = ufs_zlist_pop(&ufs->zlist, &inode->inode.zones[block]);
-    if(ul_unlikely(ec)) goto do_return;
+    if(ufs_unlikely(ec)) goto do_return;
     ec = __end_zlist(inode, &transcation);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
     *pznum = inode->inode.zones[block];
     ++inode->inode.blocks;
     goto do_return;
@@ -326,23 +326,23 @@ static int __alloc_zone_g(ufs_minode_t* ufs_restrict inode, ufs_t* ufs_restrict 
     ufs_transcation_t transcation;
 
     ec = _prealloc_zone(inode, block, &tznum);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
 
     block -= 12;
-    ec = ufs_jornal_read(&ufs->jornal, &znum, tznum, (block % UFS_ZNUM_PER_BLOCK) * 8, 8);
-    if(ul_unlikely(ec)) return ec;
+    ec = ufs_jornal_read(&ufs->jornal, &znum, tznum, (block % UFS_ZONE_PER_BLOCK) * 8, 8);
+    if(ufs_unlikely(ec)) return ec;
     if(znum != 0) { *pznum = ul_trans_u64_le(znum); return 0; }
 
     ufs_transcation_init(&transcation, &ufs->jornal);
     ufs_zlist_lock(&ufs->zlist, &transcation);
     ec = ufs_zlist_pop(&ufs->zlist, &znum);
-    if(ul_unlikely(ec)) goto do_return;
+    if(ufs_unlikely(ec)) goto do_return;
     *pznum = znum;
     znum = ul_trans_u64_le(znum);
-    ec = ufs_transcation_add(&transcation, &znum, tznum, (block % UFS_ZNUM_PER_BLOCK) * 8, 8, UFS_JORNAL_ADD_COPY);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    ec = ufs_transcation_add(&transcation, &znum, tznum, (block % UFS_ZONE_PER_BLOCK) * 8, 8, UFS_JORNAL_ADD_COPY);
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
     ec = __end_zlist(inode, &transcation);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
     ++inode->inode.blocks;
     goto do_return;
 
@@ -362,9 +362,11 @@ static int _alloc_zone(ufs_minode_t* ufs_restrict inode, uint64_t block, uint64_
 UFS_HIDDEN int ufs_minode_init(ufs_t* ufs_restrict ufs, ufs_minode_t* ufs_restrict inode, uint64_t inum) {
     int ec;
     ec = _read_inode(ufs, &inode->inode, inum);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     inode->ufs = ufs;
     inode->inum = inum;
+    ulatomic_spinlock_init(&inode->lock);
+    inode->share = 1;
     return 0;
 }
 UFS_HIDDEN int ufs_minode_create(ufs_t* ufs_restrict ufs, ufs_minode_t* ufs_restrict inode, const ufs_inode_create_t* ufs_restrict creat) {
@@ -377,9 +379,9 @@ UFS_HIDDEN int ufs_minode_create(ufs_t* ufs_restrict ufs, ufs_minode_t* ufs_rest
 
     ufs_ilist_lock(&ufs->ilist, &transcation);
     ec = ufs_ilist_pop(&ufs->ilist, &inum);
-    if(ul_unlikely(ec)) { ufs_ilist_unlock(&ufs->ilist); goto do_return; }
+    if(ufs_unlikely(ec)) { ufs_ilist_unlock(&ufs->ilist); goto do_return; }
     ec = ufs_ilist_sync(&ufs->ilist);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
 
     inode->inode.nlink = 1;
     inode->inode.mode = creat->mode;
@@ -395,12 +397,14 @@ UFS_HIDDEN int ufs_minode_create(ufs_t* ufs_restrict ufs, ufs_minode_t* ufs_rest
 
     memset(inode->inode.zones, 0, sizeof(inode->inode.zones));
     ec = _write_inode(&transcation, &inode->inode, inum);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
 
     ec = ufs_transcation_commit_all(&transcation);
-    if(ul_unlikely(ec)) goto fail_to_alloc;
+    if(ufs_unlikely(ec)) goto fail_to_alloc;
     inode->ufs = ufs;
     inode->inum = inum;
+    ulatomic_spinlock_init(&inode->lock);
+    inode->share = 1;
     goto do_return;
 
 fail_to_alloc:
@@ -464,14 +468,14 @@ static int _minode_pread(
     block = off / UFS_BLOCK_SIZE;
     boff = off % UFS_BLOCK_SIZE;
     ec = _seek_zone(inode, block, &znum);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     if(boff + len <= UFS_BLOCK_SIZE) {
         ec = _trans_read(inode, transcation, buf, len, znum, boff);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         *pread = len; return 0;
     }
     ec = _trans_read(inode, transcation, buf, UFS_BLOCK_SIZE - boff, znum, boff);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     nread = UFS_BLOCK_SIZE - boff;
     len -= nread;
     buf += nread;
@@ -479,9 +483,9 @@ static int _minode_pread(
     rest_block = len / UFS_BLOCK_SIZE;
     while(rest_block--) {
         ec = _seek_zone(inode, block++, &znum);
-        if(ul_unlikely(ec)) { *pread = nread; return 0; }
+        if(ufs_unlikely(ec)) { *pread = nread; return 0; }
         ec = _trans_read_block(inode, transcation, buf, znum);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         nread += UFS_BLOCK_SIZE;
         len -= UFS_BLOCK_SIZE;
         buf += UFS_BLOCK_SIZE;
@@ -489,7 +493,7 @@ static int _minode_pread(
 
     if(len) {
         ec = _seek_zone(inode, block, &znum);
-        if(ul_unlikely(ec)) { *pread = nread; return 0; }
+        if(ufs_unlikely(ec)) { *pread = nread; return 0; }
         ec = _trans_read(inode, transcation, buf, len, znum, 0);
         nread += len;
     }
@@ -516,14 +520,14 @@ static int _minode_pwrite(
     block = off / UFS_BLOCK_SIZE;
     boff = off % UFS_BLOCK_SIZE;
     ec = _alloc_zone(inode, block, &znum);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     if(boff + len <= UFS_BLOCK_SIZE) {
         ec = _trans_write(inode, transcation, buf, len, znum, boff);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         *pwriten = len; return 0;
     }
     ec = _trans_write(inode, transcation, buf, UFS_BLOCK_SIZE - boff, znum, boff);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     nwriten = UFS_BLOCK_SIZE - boff;
     len -= nwriten;
     buf += nwriten;
@@ -531,9 +535,9 @@ static int _minode_pwrite(
     rest_block = len / UFS_BLOCK_SIZE;
     while(rest_block--) {
         ec = _alloc_zone(inode, block++, &znum);
-        if(ul_unlikely(ec)) { *pwriten = nwriten; return 0; }
+        if(ufs_unlikely(ec)) { *pwriten = nwriten; return 0; }
         ec = _trans_write_block(inode, transcation, buf, znum);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         nwriten += UFS_BLOCK_SIZE;
         len -= UFS_BLOCK_SIZE;
         buf += UFS_BLOCK_SIZE;
@@ -541,7 +545,7 @@ static int _minode_pwrite(
 
     if(len) {
         ec = _alloc_zone(inode, block, &znum);
-        if(ul_unlikely(ec)) { *pwriten = nwriten; return 0; }
+        if(ufs_unlikely(ec)) { *pwriten = nwriten; return 0; }
         ec = _trans_write(inode, transcation, buf, len, znum, 0);
         nwriten += len;
     }
@@ -552,13 +556,13 @@ UFS_HIDDEN int ufs_minode_pwrite(
     const void* ufs_restrict buf, size_t len, uint64_t off, size_t* ufs_restrict pwriten
 ) {
     int ec = _minode_pwrite(inode, transcation, ul_reinterpret_cast(const char*, buf), len, off, pwriten);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     if(off + len > inode->inode.size) {
         const uint64_t osize = inode->inode.size;
         inode->inode.size = off + len;
         if(transcation) ec = _write_inode(transcation, &inode->inode, inode->inum);
         else ec = _write_inode_direct(&inode->ufs->jornal, &inode->inode, inode->inum);
-        if(ul_unlikely(ec)) inode->inode.size = osize;
+        if(ufs_unlikely(ec)) inode->inode.size = osize;
         return ec;
     }
     return 0;
@@ -572,7 +576,7 @@ UFS_HIDDEN int ufs_minode_sync_meta(ufs_minode_t* inode) {
     _write_inode(&transcation, &inode->inode, inode->inum);
     ec = ufs_transcation_commit_all(&transcation);
     ufs_transcation_deinit(&transcation);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     return ufs_fd_sync(inode->ufs->fd);
 }
 UFS_HIDDEN int ufs_minode_sync(ufs_minode_t* inode, int only_data) {
@@ -586,7 +590,7 @@ UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block, uint64_
     uint64_t znum;
     for(i = 0; i < block; ++i) {
         ec = _alloc_zone(inode, block, &znum);
-        if(ul_unlikely(ec)) break;
+        if(ufs_unlikely(ec)) break;
     }
     *pblock = i;
     return ec;
@@ -604,18 +608,18 @@ static int __minode_shrink_xr(ufs_minode_t* ufs_restrict inode, uint64_t znum, u
     ufs_zlist_lock(&inode->ufs->zlist, &transcation);
 
     oblocks = inode->inode.blocks;
-    for(i = UFS_ZNUM_PER_BLOCK; i > block; --i)
+    for(i = UFS_ZONE_PER_BLOCK; i > block; --i)
         if(buf[i - 1]) {
             ec = ufs_zlist_push(&inode->ufs->zlist, ul_trans_u64_le(buf[i - 1]));
-            if(ul_unlikely(ec)) goto fail_to_shrink;
+            if(ufs_unlikely(ec)) goto fail_to_shrink;
             --inode->inode.blocks;
             buf[i - 1] = 0;
         }
     ec = ufs_transcation_add_block(&transcation, buf, znum, UFS_JORNAL_ADD_MOVE);
     buf = NULL;
-    if(ul_unlikely(ec)) goto fail_to_shrink;
+    if(ufs_unlikely(ec)) goto fail_to_shrink;
     ec = __end_zlist(inode, &transcation);
-    if(ul_unlikely(ec)) goto fail_to_shrink;
+    if(ufs_unlikely(ec)) goto fail_to_shrink;
     goto do_return;
 
 fail_to_shrink:
@@ -634,9 +638,9 @@ static int __minode_shrink_x1(ufs_minode_t* inode, uint64_t znum, uint64_t block
 
     ufs_assert(znum != 0);
     buf = ul_reinterpret_cast(uint64_t*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(buf == NULL)) return ENOMEM;
+    if(ufs_unlikely(buf == NULL)) return UFS_ENOMEM;
     ec = ufs_jornal_read_block(&inode->ufs->jornal, buf, znum);
-    if(ul_unlikely(ec)) { ufs_free(buf); return ENOMEM; }
+    if(ufs_unlikely(ec)) { ufs_free(buf); return UFS_ENOMEM; }
     return __minode_shrink_xr(inode, znum, block, buf);
 }
 static int __minode_shrink_x2(ufs_minode_t* inode, uint64_t znum, uint64_t block) {
@@ -646,20 +650,20 @@ static int __minode_shrink_x2(ufs_minode_t* inode, uint64_t znum, uint64_t block
 
     ufs_assert(znum != 0);
     buf = ul_reinterpret_cast(uint64_t*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(buf == NULL)) return ENOMEM;
-    bq = block / UFS_ZNUM_PER_BLOCK;
-    br = block % UFS_ZNUM_PER_BLOCK;
+    if(ufs_unlikely(buf == NULL)) return UFS_ENOMEM;
+    bq = block / UFS_ZONE_PER_BLOCK;
+    br = block % UFS_ZONE_PER_BLOCK;
     ++bq;
 
     ec = ufs_jornal_read_block(&inode->ufs->jornal, buf, znum);
-    if(ul_unlikely(ec)) { ufs_free(buf); return ec; }
-    for(i = UFS_ZNUM_PER_BLOCK; i > bq; --i)
+    if(ufs_unlikely(ec)) { ufs_free(buf); return ec; }
+    for(i = UFS_ZONE_PER_BLOCK; i > bq; --i)
         if(buf[i - 1]) {
             ec = __minode_shrink_x1(inode, ul_trans_u64_le(buf[i - 1]), 0);
-            if(ul_unlikely(ec)) { ufs_free(buf); return ec; }
+            if(ufs_unlikely(ec)) { ufs_free(buf); return ec; }
         }
     if(buf[bq - 1]) ec = __minode_shrink_x1(inode, ul_trans_u64_le(buf[bq - 1]), br);
-    if(ul_unlikely(ec)) { ufs_free(buf); return ec; }
+    if(ufs_unlikely(ec)) { ufs_free(buf); return ec; }
     return __minode_shrink_xr(inode, znum, bq - !br, buf);
 }
 static int __minode_shrink_x3(ufs_minode_t* inode, uint64_t znum, uint64_t block) {
@@ -669,20 +673,20 @@ static int __minode_shrink_x3(ufs_minode_t* inode, uint64_t znum, uint64_t block
 
     ufs_assert(znum != 0);
     buf = ul_reinterpret_cast(uint64_t*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(buf == NULL)) return ENOMEM;
-    bq = block / (UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK);
-    br = block % (UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK);
+    if(ufs_unlikely(buf == NULL)) return UFS_ENOMEM;
+    bq = block / (UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK);
+    br = block % (UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK);
     ++bq;
 
     ec = ufs_jornal_read_block(&inode->ufs->jornal, buf, znum);
-    if(ul_unlikely(ec)) { ufs_free(buf); return ec; }
-    for(i = UFS_ZNUM_PER_BLOCK; i > bq; --i)
+    if(ufs_unlikely(ec)) { ufs_free(buf); return ec; }
+    for(i = UFS_ZONE_PER_BLOCK; i > bq; --i)
         if(buf[i - 1]) {
             ec = __minode_shrink_x2(inode, ul_trans_u64_le(buf[i - 1]), 0);
-            if(ul_unlikely(ec)) { ufs_free(buf); return ec; }
+            if(ufs_unlikely(ec)) { ufs_free(buf); return ec; }
         }
     if(buf[bq - 1]) ec = __minode_shrink_x2(inode, ul_trans_u64_le(buf[bq - 1]), br);
-    if(ul_unlikely(ec)) { ufs_free(buf); return ec; }
+    if(ufs_unlikely(ec)) { ufs_free(buf); return ec; }
     return __minode_shrink_xr(inode, znum, bq - !br, buf);
 }
 static int __minode_shrink0(ufs_minode_t* inode, uint64_t block) {
@@ -699,12 +703,12 @@ static int __minode_shrink0(ufs_minode_t* inode, uint64_t block) {
     for(i = block; i < 12; ++i)
         if(oz[i] != 0) {
             ec = ufs_zlist_push(&inode->ufs->zlist, oz[i]);
-            if(ul_unlikely(ec)) goto fail_to_shrink;
+            if(ufs_unlikely(ec)) goto fail_to_shrink;
             inode->inode.zones[i] = 0;
             --inode->inode.blocks;
         }
     ec = __end_zlist(inode, &transcation);
-    if(ul_unlikely(ec)) goto fail_to_shrink;
+    if(ufs_unlikely(ec)) goto fail_to_shrink;
     goto do_return;
 
 fail_to_shrink:
@@ -724,7 +728,7 @@ static int __minode_shrink1(ufs_minode_t* inode, uint64_t block, int zk) {
     oz = inode->inode.zones[zk];
     if(oz == 0) return 0;
     ec = __minode_shrink_x1(inode, oz, block);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
 
     if(block == 0) {
         ufs_transcation_t transcation;
@@ -735,9 +739,9 @@ static int __minode_shrink1(ufs_minode_t* inode, uint64_t block, int zk) {
         --inode->inode.blocks;
         inode->inode.zones[zk] = 0;
         ec = ufs_zlist_push(&inode->ufs->zlist, oz);
-        if(ul_unlikely(ec)) goto fail_to_shrink;
+        if(ufs_unlikely(ec)) goto fail_to_shrink;
         ec = __end_zlist(inode, &transcation);
-        if(ul_unlikely(ec)) goto fail_to_shrink;
+        if(ufs_unlikely(ec)) goto fail_to_shrink;
         goto do_return;
 
     fail_to_shrink:
@@ -758,7 +762,7 @@ static int __minode_shrink2(ufs_minode_t* inode, uint64_t block, int zk) {
     oz = inode->inode.zones[zk];
     if(oz == 0) return 0;
     ec = __minode_shrink_x2(inode, oz, block);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
 
     if(block == 0) {
         ufs_transcation_t transcation;
@@ -769,9 +773,9 @@ static int __minode_shrink2(ufs_minode_t* inode, uint64_t block, int zk) {
         --inode->inode.blocks;
         inode->inode.zones[zk] = 0;
         ec = ufs_zlist_push(&inode->ufs->zlist, oz);
-        if(ul_unlikely(ec)) goto fail_to_shrink;
+        if(ufs_unlikely(ec)) goto fail_to_shrink;
         ec = __end_zlist(inode, &transcation);
-        if(ul_unlikely(ec)) goto fail_to_shrink;
+        if(ufs_unlikely(ec)) goto fail_to_shrink;
         goto do_return;
 
     fail_to_shrink:
@@ -792,7 +796,7 @@ static int __minode_shrink3(ufs_minode_t* inode, uint64_t block, int zk) {
     oz = inode->inode.zones[zk];
     if(oz == 0) return 0;
     ec = __minode_shrink_x3(inode, oz, block);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
 
     if(block == 0) {
         ufs_transcation_t transcation;
@@ -803,9 +807,9 @@ static int __minode_shrink3(ufs_minode_t* inode, uint64_t block, int zk) {
         --inode->inode.blocks;
         inode->inode.zones[zk] = 0;
         ec = ufs_zlist_push(&inode->ufs->zlist, oz);
-        if(ul_unlikely(ec)) goto fail_to_shrink;
+        if(ufs_unlikely(ec)) goto fail_to_shrink;
         ec = __end_zlist(inode, &transcation);
-        if(ul_unlikely(ec)) goto fail_to_shrink;
+        if(ufs_unlikely(ec)) goto fail_to_shrink;
         goto do_return;
 
     fail_to_shrink:
@@ -821,34 +825,34 @@ static int __minode_shrink3(ufs_minode_t* inode, uint64_t block, int zk) {
 }
 UFS_HIDDEN int ufs_minode_shrink(ufs_minode_t* inode, uint64_t block) {
     int ec;
-    uint64_t B = 12 + UFS_ZNUM_PER_BLOCK * 2 + UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK;
+    uint64_t B = 12 + UFS_ZONE_PER_BLOCK * 2 + UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK;
 
-    if(block > B + UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK) return 0;
+    if(block > B + UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK) return 0;
 
     if(block > B) {
         ec = __minode_shrink3(inode, block - B, 15);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         block = B;
     }
-    B -= UFS_ZNUM_PER_BLOCK * UFS_ZNUM_PER_BLOCK;
+    B -= UFS_ZONE_PER_BLOCK * UFS_ZONE_PER_BLOCK;
 
     if(block > B) {
         ec = __minode_shrink2(inode, block - B, 14);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         block = B;
     }
-    B -= UFS_ZNUM_PER_BLOCK;
+    B -= UFS_ZONE_PER_BLOCK;
 
     if(block > B) {
         ec = __minode_shrink1(inode, block - B, 13);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         block = B;
     }
-    B -= UFS_ZNUM_PER_BLOCK;
+    B -= UFS_ZONE_PER_BLOCK;
 
     if(block > B) {
         ec = __minode_shrink1(inode, block - B, 12);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         block = B;
     }
 
@@ -864,54 +868,68 @@ UFS_HIDDEN int ufs_minode_resize(ufs_minode_t* inode, uint64_t size) {
     if(size < inode->inode.size) {
         uint64_t sz = (inode->inode.size - size) / 2 + size;
         ec = ufs_minode_shrink(inode, (sz + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
     }
     inode->inode.size = size;
 
     ec = _write_inode_direct(&inode->ufs->jornal, &inode->inode, inode->inum);
-    if(ul_unlikely(ec)) inode->inode.size = osize;
+    if(ufs_unlikely(ec)) inode->inode.size = osize;
     return ec;
 }
 
 
-static void _ufs_inode_debug(const ufs_inode_t* inode, FILE* fp, const char* title) {
-    fprintf(fp, "%s [%p]\n", title, ufs_const_cast(void*, inode));
+UFS_HIDDEN void _ufs_inode_debug(const ufs_inode_t* inode, FILE* fp, int space) {
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
     fprintf(fp, "\tlink: %" PRIu32 "\n", inode->nlink);
-    fprintf(fp, "\tmode: %" PRIu16 "\n", inode->mode);
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
+    fprintf(fp, "\tmode: 0%" PRIo16 "\n", inode->mode);
 
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
     fprintf(fp, "\tsize: %" PRIu64 "\n", inode->size);
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
     fprintf(fp, "\tblock: %" PRIu64 "\n", inode->blocks);
 
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
     fprintf(fp, "\tcreate time: "); ufs_ptime(inode->ctime, NULL, fp); fputc('\n', fp);
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
     fprintf(fp, "\tmodify time: "); ufs_ptime(inode->mtime, NULL, fp); fputc('\n', fp);
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
     fprintf(fp, "\taccess time: "); ufs_ptime(inode->atime, NULL, fp); fputc('\n', fp);
 
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
     fprintf(fp, "\tuid: %" PRIi32 "\n", inode->uid);
+    for(int t = space; t-- > 0; fputc('\t', fp)) { }
     fprintf(fp, "\tgid: %" PRIi32 "\n", inode->gid);
 
     do {
         int i;
+        for(int t = space; t-- > 0; fputc('\t', fp)) { }
         fprintf(fp, "\tzones0: ");
         for(i = 0; i < 12; ++i)
             fprintf(fp, "[%" PRIu64 "]", inode->zones[i]);
         fputc('\n', fp);
 
+        for(int t = space; t-- > 0; fputc('\t', fp)) { }
         fprintf(fp, "\tzones1: ");
         for(i = 12; i < 14; ++i)
             fprintf(fp, "[%" PRIu64 "]", inode->zones[i]);
         fputc('\n', fp);
 
+        for(int t = space; t-- > 0; fputc('\t', fp)) { }
         fprintf(fp, "\tzones2: [%" PRIu64 "]\n", inode->zones[14]);
+        for(int t = space; t-- > 0; fputc('\t', fp)) { }
         fprintf(fp, "\tzones3: [%" PRIu64 "]\n", inode->zones[15]);
     } while(0);
 }
 
 UFS_HIDDEN void ufs_inode_debug(const ufs_inode_t* inode, FILE* fp) {
-    _ufs_inode_debug(inode, fp, "inode");
+    fprintf(fp, "inode [%p]\n", ufs_const_cast(void*, inode));
+    _ufs_inode_debug(inode, fp, 0);
 }
 
 UFS_HIDDEN void ufs_minode_debug(const ufs_minode_t* inode, FILE* fp) {
-    _ufs_inode_debug(&inode->inode, fp, "minode");
+    fprintf(fp, "minode [%p]\n", ufs_const_cast(void*, inode));
+    _ufs_inode_debug(&inode->inode, fp, 0);
     fprintf(fp, "\tufs: [%p]\n", ufs_const_cast(void*, inode->ufs));
     fprintf(fp, "\tinum: [%" PRIu64 "]\n", inode->inum);
 }

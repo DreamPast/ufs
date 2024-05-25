@@ -82,10 +82,8 @@ typedef struct ufs_inode_t {
     */
     uint64_t zones[16];
 } ufs_inode_t;
-#define UFS_INODE_DISK_SIZE (256)
 #define UFS_INODE_MEMORY_SIZE (sizeof(ufs_inode_t))
-#define UFS_INODE_PER_BLOCK (UFS_BLOCK_SIZE / UFS_INODE_DISK_SIZE)
-#define UFS_ZNUM_PER_BLOCK (UFS_BLOCK_SIZE / 8)
+#define UFS_ZONE_PER_BLOCK (UFS_BLOCK_SIZE / 8)
 UFS_HIDDEN void ufs_inode_debug(const ufs_inode_t* inode, FILE* fp);
 
 struct ufs_t;
@@ -272,6 +270,9 @@ typedef struct ufs_minode_t {
     ufs_inode_t inode;
     ufs_t* ufs;
     uint64_t inum;
+
+    ulatomic_spinlock_t lock;
+    uint32_t share;
 } ufs_minode_t;
 
 UFS_HIDDEN int ufs_minode_init(ufs_t* ufs_restrict ufs, ufs_minode_t* ufs_restrict inode, uint64_t inum);
@@ -295,21 +296,31 @@ UFS_HIDDEN int ufs_minode_sync(ufs_minode_t* inode, int only_data);
 UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block, uint64_t* pblock);
 UFS_HIDDEN int ufs_minode_shrink(ufs_minode_t* inode, uint64_t block);
 UFS_HIDDEN int ufs_minode_resize(ufs_minode_t* inode, uint64_t size);
+UFS_HIDDEN void _ufs_inode_debug(const ufs_inode_t* inode, FILE* fp, int space);
 UFS_HIDDEN void ufs_minode_debug(const ufs_minode_t* inode, FILE* fp);
+ul_hapi void ufs_minode_lock(ufs_minode_t* inode) { ulatomic_spinlock_lock(&inode->lock); }
+ul_hapi void ufs_minode_unlock(ufs_minode_t* inode) { ulatomic_spinlock_unlock(&inode->lock); }
 
 
 
-typedef struct ufs_file_t {
-    ufs_minode_t minode;
-
-} ufs_file_t;
-
-
-#include "ulrb.h"
 typedef struct ufs_fileset_t {
-    ulrb_node_t* root;
+    void* root;
     ulatomic_spinlock_t lock;
+    ufs_t* ufs;
 } ufs_fileset_t;
+UFS_HIDDEN int ufs_fileset_init(ufs_fileset_t* fs, ufs_t* ufs);
+UFS_HIDDEN void ufs_fileset_deinit(ufs_fileset_t* fs);
+UFS_HIDDEN int ufs_fileset_open(ufs_fileset_t* ufs_restrict fs, uint64_t inum, ufs_minode_t** ufs_restrict pinode);
+UFS_HIDDEN int ufs_fileset_creat(
+    ufs_fileset_t* ufs_restrict fs, uint64_t* pinum,
+    ufs_minode_t** ufs_restrict pinode, const ufs_inode_create_t* ufs_restrict creat
+);
+UFS_HIDDEN int ufs_fileset_close(ufs_fileset_t* fs, uint64_t inum);
+
+
+
+UFS_HIDDEN void ufs_file_debug(const ufs_file_t* file, FILE* fp);
+
 
 
 struct ufs_t {
@@ -319,6 +330,8 @@ struct ufs_t {
 
     ufs_zlist_t zlist;
     ufs_ilist_t ilist;
+
+    ufs_fileset_t fileset;
 };
 
 

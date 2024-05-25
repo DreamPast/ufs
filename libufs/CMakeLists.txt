@@ -19,6 +19,8 @@ add_library(
 	libufs_zlist.c
 	libufs_ilist.c
 	libufs_minode.c
+	libufs_fileset.c
+	libufs_file.c
 )
 include_directories(../libul/)
 

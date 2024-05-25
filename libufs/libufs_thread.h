@@ -47,6 +47,19 @@
     #define ufs_assume(cond) ((void)(cond))
 #endif
 
+#ifdef __has_builtin
+    #if __has_builtin(__builtin_expect)
+        #define ufs_likely(cond) __builtin_expect(!!(cond), 1)
+        #define ufs_unlikely(cond) __builtin_expect(!!(cond), 0)
+    #endif
+#endif
+#ifndef ufs_likely
+    #define ufs_likely(cond) (cond)
+#endif
+#ifndef ufs_unlikely
+    #define ufs_unlikely(cond) (cond)
+#endif
+
 #ifndef ufs_restrict
     #if defined(_MSC_VER)
         #define ufs_restrict __restrict

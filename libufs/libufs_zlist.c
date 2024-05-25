@@ -9,7 +9,7 @@ static void _trans_zlist(_ufs_zlist_item_t* item) {
 static _ufs_zlist_item_t* _todisk_alloc(const _ufs_zlist_item_t* item) {
     int i;
     _ufs_zlist_item_t* ret = ul_reinterpret_cast(_ufs_zlist_item_t*, ufs_malloc(UFS_BLOCK_SIZE));
-    if(ul_unlikely(ret == NULL)) return ret;
+    if(ufs_unlikely(ret == NULL)) return ret;
     ret->next = ul_trans_u64_le(item->next);
     for(i = 0; i < item->num; ++i)
         ret->stack[i] = ul_trans_u64_le(item->stack[i]);
@@ -22,7 +22,7 @@ static int _read_zlist(_ufs_zlist_item_t* ufs_restrict item, ufs_transcation_t* 
     int ec;
     int num = 0;
     ec = ufs_transcation_read_block(transcation, item, znum);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
 
     _trans_zlist(item);
     for(num = UFS_ZLIST_ENTRY_NUM_MAX; num > 0 && !item->stack[num - 1]; --num) { }
@@ -33,7 +33,7 @@ static int _read_zlist(_ufs_zlist_item_t* ufs_restrict item, ufs_transcation_t* 
 static int _write_zlist(const _ufs_zlist_item_t* ufs_restrict item, ufs_transcation_t* ufs_restrict transcation, uint64_t znum) {
     _ufs_zlist_item_t* ret;
     ret = _todisk_alloc(item);
-    if(ul_unlikely(ret == NULL)) return ENOMEM;
+    if(ufs_unlikely(ret == NULL)) return UFS_ENOMEM;
     return ufs_transcation_add_block(transcation, ret, znum, UFS_JORNAL_ADD_MOVE);
 }
 
@@ -44,7 +44,7 @@ static int _rewind_zlist(_ufs_zlist_t* ufs_restrict zlist, ufs_transcation_t* uf
     top = 0;
     while(znum && top < UFS_ZLIST_CACHE_LIST_LIMIT / 2) {
         ec = _read_zlist(zlist->item + top, transcation, znum);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         znum = zlist->item[top].next;
         ++top;
     }
@@ -65,7 +65,7 @@ static int _write_multi_zlist(const _ufs_zlist_t* ufs_restrict zlist, ufs_transc
     int ec;
     for(; i < n; ++i) {
         ec = _write_zlist(zlist->item + i, transcation, zlist->item[i].znum);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
     }
     return 0;
 }
@@ -79,8 +79,8 @@ UFS_HIDDEN int ufs_zlist_init(ufs_zlist_t* zlist, uint64_t start, uint64_t block
 
     zlist->now.block = block;
     ec = _rewind_zlist(&zlist->now, zlist->transcation, start);
-    if(ul_unlikely(ec)) return ec;
-    if(ul_unlikely(zlist->now.top == 0)) { // 内存中必须至少滞留一个块
+    if(ufs_unlikely(ec)) return ec;
+    if(ufs_unlikely(zlist->now.top == 0)) { // 内存中必须至少滞留一个块
         zlist->now.item[0].next = 0;
         zlist->now.item[0].num = 0;
         zlist->now.block = 0;
@@ -123,12 +123,12 @@ UFS_HIDDEN int ufs_zlist_sync(ufs_zlist_t* zlist) {
 
     ufs_assert(zlist->now.top > 0);
     ec = _write_multi_zlist(&zlist->now, zlist->transcation, zlist->now.stop, zlist->now.top - 1);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     ec = _write_zlist(zlist->now.item + zlist->now.top - 1, zlist->transcation, zlist->bnum);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     zlist->now.stop = zlist->now.top;
     ec = ufs_transcation_add(zlist->transcation, &block, UFS_BNUM_SB, offsetof(ufs_sb_t, zblock), 8, UFS_JORNAL_ADD_COPY);
-    if(ul_unlikely(ec)) return ec;
+    if(ufs_unlikely(ec)) return ec;
     return 0;
 }
 UFS_HIDDEN int ufs_zlist_pop(ufs_zlist_t* ufs_restrict zlist, uint64_t* ufs_restrict pznum) {
@@ -151,10 +151,10 @@ UFS_HIDDEN int ufs_zlist_pop(ufs_zlist_t* ufs_restrict zlist, uint64_t* ufs_rest
         return 0;
     }
     if(zlist->now.item[0].next == 0) // 磁盘耗尽
-        return ENOSPC;
+        return UFS_ENOSPC;
     *pznum = zlist->now.item[0].next;
     ec = _rewind_zlist(&zlist->now, zlist->transcation, *pznum);
-    if(ul_unlikely(ec)) { *pznum = 0; return ec; }
+    if(ufs_unlikely(ec)) { *pznum = 0; return ec; }
     --zlist->now.block;
     return 0;
 }
@@ -172,7 +172,7 @@ UFS_HIDDEN int ufs_zlist_push(ufs_zlist_t* zlist, uint64_t znum) {
     }
     if(n == UFS_ZLIST_CACHE_LIST_LIMIT) { // 内存中空间不足，我们写回链表
         ec = _write_multi_zlist(&zlist->now, zlist->transcation, 0, UFS_ZLIST_CACHE_LIST_LIMIT);
-        if(ul_unlikely(ec)) return ec;
+        if(ufs_unlikely(ec)) return ec;
         memmove(zlist->now.item, zlist->now.item + UFS_ZLIST_CACHE_LIST_LIMIT / 2,
             (UFS_ZLIST_CACHE_LIST_LIMIT - UFS_ZLIST_CACHE_LIST_LIMIT / 2) * sizeof(zlist->now.item[0]));
         n = UFS_ZLIST_CACHE_LIST_LIMIT / 2;
