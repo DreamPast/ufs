@@ -8,7 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#ifdef UFS_BUILD_DLL
+#ifdef LIBUFS_BUILD_DLL
     #ifdef _WIN32
         #define UFS_API __declspec(dllexport)
     #endif
@@ -49,11 +49,11 @@ extern "C" {
 
 // 获得error对应的解释字符串
 UFS_API const char* ufs_strerror(int error);
+// 将自定义的error转化为Unix Style的error
+UFS_API int ufs_uniform_error(int error);
 
 UFS_API int32_t ufs_getuid(void);
 UFS_API int32_t ufs_getgid(void);
-UFS_API int ufs_setuid(int32_t uid);
-UFS_API int ufs_setgid(int32_t gid);
 
 UFS_API int64_t ufs_time(int use_locale);
 UFS_API size_t ufs_strtime(int64_t time, char* buf, const char* fmt, size_t len);
@@ -64,36 +64,33 @@ UFS_API int ufs_ptime(int64_t time, const char* fmt, FILE* fp);
  * 文件描述符
 */
 
-typedef struct ufs_fd_t {
+typedef struct ufs_vfs_t {
     const char* type;
 
     // 关闭文件
-    void (*close)(struct ufs_fd_t* fd);
+    void (*close)(struct ufs_vfs_t* vfs);
 
     // 带偏移量的读取
-    int (*pread)(struct ufs_fd_t* fd, void* buf, size_t len, int64_t off, size_t* pread);
+    int (*pread)(struct ufs_vfs_t* vfs, void* buf, size_t len, int64_t off, size_t* pread);
     // 带偏移量的写入
-    int (*pwrite)(struct ufs_fd_t* fd, const void* buf, size_t len, int64_t off, size_t* pwriten);
+    int (*pwrite)(struct ufs_vfs_t* vfs, const void* buf, size_t len, int64_t off, size_t* pwriten);
     // 同步文件
-    int (*sync)(struct ufs_fd_t* fd);
-} ufs_fd_t;
-// 打开一个文件，当文件不存在/没有对齐到块数/无法独立占有文件时报错
-UFS_API int ufs_fd_open_file(ufs_fd_t** pfd, const char* path);
-UFS_API int ufs_fd_is_file(ufs_fd_t* fd);
+    int (*sync)(struct ufs_vfs_t* vfs);
+} ufs_vfs_t;
+// 打开一个文件，当无法独立占有文件时报错
+UFS_API int ufs_vfs_open_file(ufs_vfs_t** pfd, const char* path);
+UFS_API int ufs_vfs_is_file(ufs_vfs_t* vfs);
 
-UFS_API int ufs_fd_open_memory(ufs_fd_t** pfd, const void* src, size_t len);
-UFS_API int ufs_fd_is_memory(ufs_fd_t* fd);
-UFS_API int ufs_fd_lock_memory(ufs_fd_t* fd);
-UFS_API int ufs_fd_unlock_memory(ufs_fd_t* fd);
-UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
+UFS_API int ufs_vfs_open_memory(ufs_vfs_t** pfd, const void* src, size_t len);
+UFS_API int ufs_vfs_is_memory(ufs_vfs_t* vfs);
+UFS_API int ufs_vfs_lock_memory(ufs_vfs_t* vfs);
+UFS_API int ufs_vfs_unlock_memory(ufs_vfs_t* vfs);
+UFS_API char* ufs_vfs_get_memory(ufs_vfs_t* vfs, size_t* psize);
 
 
 /**
  * 配置
 */
-
-
-#define UFS_USE_UNIFORM_ERROR_CODE 1 // 使用统一的Unix style错误代码（默认使用）
 
 #define UFS_MAGIC1 (67) // 魔数1
 #define UFS_MAGIC2 (74) // 魔数2
@@ -102,7 +99,7 @@ UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
 #define UFS_BLOCK_SIZE (1024) // 块的大小（必须是2的指数）
 #define UFS_INODE_DEFAULT_RATIO (16*1024) // inode的默认比值（每16KB添加一个inode）
 
-#define UFS_JORNAL_NUM (UFS_BLOCK_SIZE / 8 - 6) // 最大日志数量
+#define UFS_JORNAL_NUM (120) // 最大日志数量
 
 #define UFS_BNUM_COMPACT (0) // 块号：兼容块（不使用此块，以便兼容BIOS/UEFI）
 #define UFS_BNUM_SB (1) // 块号：超级块
@@ -191,6 +188,35 @@ typedef struct ufs_context_t {
     uint16_t umask;
 } ufs_context_t;
 
+// 创建磁盘
+UFS_API int ufs_new(ufs_t** pufs, ufs_vfs_t* vfs);
+// 创建并格式化磁盘
+UFS_API int ufs_new_format(ufs_t** pufs, ufs_vfs_t* vfs, uint64_t size);
+// 同步磁盘内容
+UFS_API int ufs_sync(ufs_t* ufs);
+// 销毁磁盘
+UFS_API void ufs_destroy(ufs_t* ufs);
+
+typedef struct ufs_statvfs_t {
+    uint64_t f_bsize;
+    uint64_t f_namemax;
+
+    uint64_t f_blocks;
+    uint64_t f_bfree;
+    uint64_t f_bavail;
+
+    uint64_t f_files;
+    uint64_t f_ffree;
+    uint64_t f_favail;
+
+} ufs_statvfs_t;
+/**
+ * 获取磁盘信息
+ * 
+ * 错误；
+ *   [UFS_EINVAL] ufs为NULL或者stat为NULL
+*/
+UFS_API int ufs_statvfs(ufs_t* ufs, ufs_statvfs_t* stat);
 
 
 struct ufs_file_t;

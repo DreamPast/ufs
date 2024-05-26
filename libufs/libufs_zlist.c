@@ -74,7 +74,7 @@ UFS_HIDDEN int ufs_zlist_init(ufs_zlist_t* zlist, uint64_t start, uint64_t block
     int ec;
 
     zlist->bnum = start;
-    zlist->transcation = NULL;
+    // zlist->transcation = NULL;
     ulatomic_spinlock_init(&zlist->lock);
 
     zlist->now.block = block;

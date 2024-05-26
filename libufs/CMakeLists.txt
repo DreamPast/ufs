@@ -8,12 +8,12 @@ add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
 option(LIBUFS_NO_THREAD_SAFE "关闭多线程安全" OFF)
+option(LIBUFS_BUILD_DLL "构建动态链接库" ON)
 
-add_library(
-	libufs
+set(LIBUFS_SRC_FILES
 	libufs_thread.c
 	libufs_internel.c
-	libufs_fd.c
+	libufs_vfs.c
 	libufs_jornal.c
 	libufs_transcation.c
 	libufs_zlist.c
@@ -22,6 +22,14 @@ add_library(
 	libufs_fileset.c
 	libufs_file.c
 )
+
+if(LIBUFS_BUILD_DLL)
+	add_library(libufs SHARED ${LIBUFS_SRC_FILES})
+	add_compile_definitions(LIBUFS_BUILD_DLL)
+else()
+	add_library(libufs ${LIBUFS_SRC_FILES})
+endif()
+
 include_directories(../libul/)
 
 if(LIBUFS_NO_THREAD_SAFE)
@@ -44,9 +52,4 @@ if(1)
 	elseif("${CMAKE_C_COMPILER_ID}" MATCHES "MSVC")
 		set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W4")
 	endif()
-endif()
-
-if(1)
-	add_executable(libufs-test test.c)
-	target_link_libraries(libufs-test libufs)
 endif()

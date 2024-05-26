@@ -18,30 +18,30 @@ typedef struct _sb_transcation_t {
 #define _sb_jornal_start(p) (&(p)->jornal_start0)
 #define _sb_transcation_size (4 + 8 * UFS_JORNAL_NUM)
 
-static int _remove_flag1(ufs_fd_t* fd) {
+static int _remove_flag1(ufs_vfs_t* vfs) {
     int ec;
     uint8_t c = 0;
-    ec = ufs_fd_pwrite_check(fd, &c, 1, ufs_fd_offset(UFS_BNUM_SB) + offsetof(struct ufs_sb_t, jornal_start1));
+    ec = ufs_vfs_pwrite_check(vfs, &c, 1, ufs_vfs_offset(UFS_BNUM_SB) + offsetof(struct ufs_sb_t, jornal_start1));
     if(ufs_unlikely(ec)) return ec;
-    ec = ufs_fd_pwrite_check(fd, &c, 1, ufs_fd_offset(UFS_BNUM_SB) + offsetof(struct ufs_sb_t, jornal_last1));
+    ec = ufs_vfs_pwrite_check(vfs, &c, 1, ufs_vfs_offset(UFS_BNUM_SB) + offsetof(struct ufs_sb_t, jornal_last1));
     if(ufs_unlikely(ec)) return ec;
-    ec = ufs_fd_sync(fd);
+    ec = ufs_vfs_sync(vfs);
     if(ufs_unlikely(ec)) return ec;
     return 0;
 }
-static int _remove_flag2(ufs_fd_t* fd) {
+static int _remove_flag2(ufs_vfs_t* vfs) {
     int ec;
     uint8_t c = 0;
-    ec = ufs_fd_pwrite_check(fd, &c, 1, ufs_fd_offset(UFS_BNUM_SB) + offsetof(struct ufs_sb_t, jornal_start0));
+    ec = ufs_vfs_pwrite_check(vfs, &c, 1, ufs_vfs_offset(UFS_BNUM_SB) + offsetof(struct ufs_sb_t, jornal_start0));
     if(ufs_unlikely(ec)) return ec;
-    ec = ufs_fd_pwrite_check(fd, &c, 1, ufs_fd_offset(UFS_BNUM_SB) + offsetof(struct ufs_sb_t, jornal_last0));
+    ec = ufs_vfs_pwrite_check(vfs, &c, 1, ufs_vfs_offset(UFS_BNUM_SB) + offsetof(struct ufs_sb_t, jornal_last0));
     if(ufs_unlikely(ec)) return ec;
-    ec = ufs_fd_sync(fd);
+    ec = ufs_vfs_sync(vfs);
     if(ufs_unlikely(ec)) return ec;
     return 0;
 }
 
-UFS_HIDDEN int ufs_do_jornal(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* ufs_restrict ops, int num) {
+UFS_HIDDEN int ufs_do_jornal(ufs_vfs_t* ufs_restrict vfs, const ufs_jornal_op_t* ufs_restrict ops, int num) {
     int ec;
     int i;
     _sb_transcation_t disk;
@@ -51,8 +51,8 @@ UFS_HIDDEN int ufs_do_jornal(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* u
     disk.jornal_start1 = 0xFF;
     for(i = 0; i < num; ++i) {
         disk.jornal[i] = ul_trans_u64_le(ops[i].bnum);
-        ec = ufs_fd_copy(fd,
-            ufs_fd_offset(ops[i].bnum), ufs_fd_offset(UFS_BNUM_JORNAL + i), UFS_BLOCK_SIZE);
+        ec = ufs_vfs_copy(vfs,
+            ufs_vfs_offset(ops[i].bnum), ufs_vfs_offset(UFS_BNUM_JORNAL + i), UFS_BLOCK_SIZE);
         if(ufs_unlikely(ec)) return ec;
     }
     for(; i < UFS_JORNAL_NUM; ++i)
@@ -61,31 +61,31 @@ UFS_HIDDEN int ufs_do_jornal(ufs_fd_t* ufs_restrict fd, const ufs_jornal_op_t* u
     disk.jornal_last1 = 0xFF;
 
     // 2. 将四个标记和日志偏移量写入
-    ec = ufs_fd_pwrite_check(fd, _sb_jornal_start(&disk), _sb_transcation_size, ufs_fd_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
+    ec = ufs_vfs_pwrite_check(vfs, _sb_jornal_start(&disk), _sb_transcation_size, ufs_vfs_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
     if(ufs_unlikely(ec)) return ec;
-    ec = ufs_fd_sync(fd);
+    ec = ufs_vfs_sync(vfs);
     if(ufs_unlikely(ec)) return ec;
 
     // 3. 写入区块
     for(i = 0; i < num; ++i) {
-        ec = ufs_fd_pwrite_check(fd, ops[i].buf, UFS_BLOCK_SIZE, ufs_fd_offset(ops[i].bnum));
+        ec = ufs_vfs_pwrite_check(vfs, ops[i].buf, UFS_BLOCK_SIZE, ufs_vfs_offset(ops[i].bnum));
         if(ufs_unlikely(ec)) return ec;
     }
-    ec = ufs_fd_sync(fd);
+    ec = ufs_vfs_sync(vfs);
     if(ufs_unlikely(ec)) return ec;
 
     // 4. 擦除标记1
-    ec = _remove_flag1(fd);
+    ec = _remove_flag1(vfs);
     if(ufs_unlikely(ec)) return ec;
 
     // 5. 擦除标记0
-    ec = _remove_flag2(fd);
+    ec = _remove_flag2(vfs);
     if(ufs_unlikely(ec)) return ec;
 
     return 0;
 }
 
-UFS_HIDDEN int ufs_fix_jornal(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict sb) {
+UFS_HIDDEN int ufs_fix_jornal(ufs_vfs_t* ufs_restrict vfs, ufs_sb_t* ufs_restrict sb) {
     int ec;
     int i;
     _sb_transcation_t disk;
@@ -108,28 +108,28 @@ UFS_HIDDEN int ufs_fix_jornal(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict 
         disk.jornal_last0 = 0;
         disk.jornal_start1 = 0;
         disk.jornal_last1 = 0;
-        return ufs_fd_pwrite_check(fd, _sb_jornal_start(&disk), _sb_transcation_size, ufs_fd_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
+        return ufs_vfs_pwrite_check(vfs, _sb_jornal_start(&disk), _sb_transcation_size, ufs_vfs_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
 
     case 0xF:
         // 写入区块未完成/标记擦除未开始
         for(i = 0; i < UFS_JORNAL_NUM; ++i)
             if(sb->jornal[i])
-                ec = ufs_fd_copy(fd, ufs_fd_offset(UFS_BNUM_JORNAL + i), ufs_fd_offset(ul_trans_u64_le(sb->jornal[i])), UFS_BLOCK_SIZE);
+                ec = ufs_vfs_copy(vfs, ufs_vfs_offset(UFS_BNUM_JORNAL + i), ufs_vfs_offset(ul_trans_u64_le(sb->jornal[i])), UFS_BLOCK_SIZE);
         disk.jornal_start0 = 0;
         disk.jornal_last0 = 0;
         disk.jornal_start1 = 0;
         disk.jornal_last1 = 0;
-        return ufs_fd_pwrite_check(fd, _sb_jornal_start(&disk), _sb_transcation_size, ufs_fd_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
+        return ufs_vfs_pwrite_check(vfs, _sb_jornal_start(&disk), _sb_transcation_size, ufs_vfs_offset(UFS_BNUM_SB) + UFS_JORNAL_OFFSET);
 
     case 0xB: case 0xD:
         // 标记1擦除未完成
-        ec = _remove_flag1(fd);
+        ec = _remove_flag1(vfs);
         if(ufs_unlikely(ec)) return ec;
-        return _remove_flag2(fd);
+        return _remove_flag2(vfs);
 
     case 0x9:
         // 标记0擦除未开始
-        return _remove_flag2(fd);
+        return _remove_flag2(vfs);
 
     case 0xA: case 0x5:
         // 非法中间状态
@@ -138,8 +138,8 @@ UFS_HIDDEN int ufs_fix_jornal(ufs_fd_t* ufs_restrict fd, ufs_sb_t* ufs_restrict 
     return -1;
 }
 
-UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_fd_t* ufs_restrict fd) {
-    jornal->fd = fd;
+UFS_HIDDEN int ufs_jornal_init(ufs_jornal_t* ufs_restrict jornal, ufs_vfs_t* ufs_restrict vfs) {
+    jornal->vfs = vfs;
     jornal->num = 0;
     ulatomic_spinlock_init(&jornal->lock);
     return 0;
@@ -173,7 +173,7 @@ static void ufs_jornal_merge_nolock(ufs_jornal_t* jornal) {
 static int ufs_jornal_sync_nolock(ufs_jornal_t* jornal) {
     int ec, i;
     ufs_jornal_merge_nolock(jornal);
-    ec = ufs_do_jornal(jornal->fd, jornal->ops, jornal->num);
+    ec = ufs_do_jornal(jornal->vfs, jornal->ops, jornal->num);
     if(ufs_unlikely(ec)) return ec;
     for(i = jornal->num - 1; i >= 0; --i)
         ufs_free(ufs_const_cast(void*, jornal->ops[i].buf));
@@ -187,7 +187,7 @@ static int ufs_jornal_read_block_nolock(ufs_jornal_t* ufs_restrict jornal, void*
             memcpy(buf, jornal->ops[i].buf, UFS_BLOCK_SIZE);
             return 0;
         }
-    return ufs_fd_pread_check(jornal->fd, buf, UFS_BLOCK_SIZE, ufs_fd_offset(bnum));
+    return ufs_vfs_pread_check(jornal->vfs, buf, UFS_BLOCK_SIZE, ufs_vfs_offset(bnum));
 }
 static int ufs_jornal_add_block_nolock(ufs_jornal_t* ufs_restrict jornal, const void* ufs_restrict buf, uint64_t bnum, int flag) {
     if(ufs_unlikely(jornal->num == UFS_JORNAL_NUM)) {
@@ -255,7 +255,7 @@ UFS_HIDDEN int ufs_jornal_read_block(ufs_jornal_t* ufs_restrict jornal, void* uf
             return 0;
         }
     ulatomic_spinlock_unlock(&jornal->lock);
-    return ufs_fd_pread_check(jornal->fd, buf, UFS_BLOCK_SIZE, ufs_fd_offset(bnum));
+    return ufs_vfs_pread_check(jornal->vfs, buf, UFS_BLOCK_SIZE, ufs_vfs_offset(bnum));
 }
 UFS_HIDDEN int ufs_jornal_read(ufs_jornal_t* ufs_restrict jornal, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {
     int i;
@@ -267,7 +267,7 @@ UFS_HIDDEN int ufs_jornal_read(ufs_jornal_t* ufs_restrict jornal, void* ufs_rest
             return 0;
         }
     ulatomic_spinlock_unlock(&jornal->lock);
-    return ufs_fd_pread_check(jornal->fd, buf, len, ufs_fd_offset2(bnum, off));
+    return ufs_vfs_pread_check(jornal->vfs, buf, len, ufs_vfs_offset2(bnum, off));
 }
 UFS_HIDDEN int ufs_jornal_sync(ufs_jornal_t* jornal) {
     int ec;

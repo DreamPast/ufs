@@ -75,7 +75,7 @@ Red-Black Tree (fast but restricted version)
 #endif /* ul_hapi */
 
 #ifndef ul_nodiscard
-  #if defined(__has_cpp_attribute)
+  #if defined(__cplusplus) && defined(__has_cpp_attribute)
     #if __has_cpp_attribute(nodiscard)
       #define ul_nodiscard [[nodiscard]]
     #endif

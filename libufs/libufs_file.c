@@ -357,7 +357,7 @@ UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* pat
     if(ufs_unlikely((flag & UFS_O_RDONLY) && (flag & UFS_O_WRONLY))) return UFS_EINVAL;
 
     mask &= context->umask & 0777u;
-    ec = _open(context, &minode, path, flag, mask | UFS_S_IFREG);
+    ec = _open(context, &minode, path, flag, (mask & 0777) | UFS_S_IFREG);
     if(ufs_unlikely(ec)) return ec;
     if(!UFS_S_ISREG(minode->inode.mode)) {
         if(UFS_S_ISDIR(minode->inode.mode)) {
@@ -714,11 +714,11 @@ UFS_API int ufs_mkdir(ufs_context_t* context, const char* path, uint16_t mode) {
 
 UFS_API int ufs_rmdir(ufs_context_t* context, const char* path) {
     int ec;
-    ufs_minode_t* minode;
+    ufs_minode_t* minode = NULL;
     ufs_minode_t* ppath_minode;
     const char* fname;
-    uint64_t inum;
-    uint64_t off;
+    uint64_t inum = 0;
+    uint64_t off = 0;
 
     if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
     if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
@@ -756,11 +756,11 @@ UFS_API int ufs_rmdir(ufs_context_t* context, const char* path) {
 
 UFS_API int ufs_unlink(ufs_context_t* context, const char* path) {
     int ec;
-    ufs_minode_t* minode;
+    ufs_minode_t* minode = NULL;
     ufs_minode_t* ppath_minode;
     const char* fname;
-    uint64_t inum;
-    uint64_t off;
+    uint64_t inum = 0;
+    uint64_t off = 0;
 
     if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
     if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
@@ -790,7 +790,7 @@ UFS_API int ufs_unlink(ufs_context_t* context, const char* path) {
 
 UFS_API int ufs_link(ufs_context_t* context, const char* target, const char* source) {
     int ec;
-    ufs_minode_t* tinode;
+    ufs_minode_t* tinode = NULL;
     ufs_minode_t* sinode;
     ec = _open(context, &sinode, source, 0, 0);
     if(ufs_unlikely(ec)) return ec;

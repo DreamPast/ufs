@@ -102,11 +102,25 @@ UFS_HIDDEN int ufs_fileset_close(ufs_fileset_t* _fs, uint64_t inum) {
     ufs_minode_lock(&node->minode);
     if(--node->minode.share == 0) {
         ec = ufs_minode_deinit(&node->minode);
-        (void)ulrb_remove(&fs->root, &inum, _node_comp, NULL);
+        node = ul_reinterpret_cast(_node_t*, ulrb_remove(&fs->root, &inum, _node_comp, NULL));
         ufs_free(node);
     }
     ufs_minode_unlock(&node->minode);
 
     ulatomic_spinlock_unlock(&fs->lock);
     return ec;
+}
+
+static void _node_walk(void* opaque, const ulrb_node_t* _node) {
+    _node_t* node = ul_reinterpret_cast(_node_t*, ufs_const_cast(ulrb_node_t*, _node));
+    (void)opaque;
+    ufs_minode_lock(&node->minode);
+    ufs_minode_sync(&node->minode, 0);
+    ufs_minode_unlock(&node->minode);
+}
+UFS_HIDDEN void ufs_fileset_sync(ufs_fileset_t* _fs) {
+    _fileset_t* fs = ul_reinterpret_cast(_fileset_t*, _fs);
+    ulatomic_spinlock_lock(&fs->lock);
+    ulrb_walk_preorder(fs->root, _node_walk, NULL);
+    ulatomic_spinlock_unlock(&fs->lock);
 }

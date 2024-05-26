@@ -1,6 +1,5 @@
 #include "libufs_internel.h"
 
-
 // 对inode进行大小端转化
 static void _trans_inode(ufs_inode_t* dest, const ufs_inode_t* src) {
     dest->nlink = ul_trans_u32_le(src->nlink);
@@ -19,7 +18,6 @@ static void _trans_inode(ufs_inode_t* dest, const ufs_inode_t* src) {
     for(int i = 0; i < 16; ++i)
         dest->zones[i] = ul_trans_u64_le(src->zones[i]);
 }
-
 
 // 从inum中读取inode信息
 static int _read_inode(ufs_t* ufs, ufs_inode_t* inode, uint64_t inum) {
@@ -42,7 +40,7 @@ static int _write_inode(ufs_transcation_t* transcation, ufs_inode_t* inode, uint
     return ufs_transcation_add(transcation, d, inum / UFS_INODE_PER_BLOCK,
         (inum % UFS_INODE_PER_BLOCK) * UFS_INODE_DISK_SIZE, UFS_INODE_DISK_SIZE, UFS_JORNAL_ADD_MOVE);
 }
-static int _write_inode_direct(ufs_jornal_t* jornal, ufs_inode_t* inode, uint64_t inum) {
+UFS_HIDDEN int _write_inode_direct(ufs_jornal_t* jornal, ufs_inode_t* inode, uint64_t inum) {
     ufs_inode_t* d = ul_reinterpret_cast(ufs_inode_t*, ufs_malloc(UFS_INODE_DISK_SIZE));
     if(ufs_unlikely(d == NULL)) return UFS_ENOMEM;
     memset(ul_reinterpret_cast(char*, d) + UFS_INODE_MEMORY_SIZE, 0, UFS_INODE_DISK_SIZE - UFS_INODE_MEMORY_SIZE);
@@ -200,7 +198,7 @@ static int __prealloc_zone2(ufs_minode_t* ufs_restrict inode, ufs_t* ufs_restric
 
 fail_to_alloc:
     ufs_zlist_rollback(&ufs->zlist);
-    inode->inode.blocks -= (!oz[0] && nz[0]) + (!oz[1] && nz[1]);
+    inode->inode.blocks -= ul_static_cast(uint64_t, (!oz[0] && nz[0]) + (!oz[1] && nz[1]));
     nz[0] = 0; nz[1] = 0;
 
 do_return:
@@ -266,7 +264,7 @@ static int __prealloc_zone3(ufs_minode_t* ufs_restrict inode, ufs_t* ufs_restric
 
 fail_to_alloc:
     ufs_zlist_rollback(&ufs->zlist);
-    inode->inode.blocks -= (!oz[0] && nz[0]) + (!oz[1] && nz[1]) + (!oz[2] && nz[2]);
+    inode->inode.blocks -= ul_static_cast(uint64_t, (!oz[0] && nz[0]) + (!oz[1] && nz[1]) + (!oz[2] && nz[2]));
     nz[0] = 0; nz[2] = 0;
 
 do_return:
@@ -439,7 +437,7 @@ static int _trans_read(
 ) {
     return transcation
         ? ufs_transcation_read(transcation, buf, bnum, off, len)
-        : ufs_fd_pread_check(inode->ufs->fd, buf, len, ufs_fd_offset2(bnum, off));
+        : ufs_vfs_pread_check(inode->ufs->vfs, buf, len, ufs_vfs_offset2(bnum, off));
 }
 static int _trans_read_block(
     ufs_minode_t* ufs_restrict inode, ufs_transcation_t* ufs_restrict transcation,
@@ -447,7 +445,7 @@ static int _trans_read_block(
 ) {
     return  transcation
         ? ufs_transcation_read_block(transcation, buf, bnum)
-        : ufs_fd_pread_check(inode->ufs->fd, buf, UFS_BLOCK_SIZE, ufs_fd_offset(bnum));
+        : ufs_vfs_pread_check(inode->ufs->vfs, buf, UFS_BLOCK_SIZE, ufs_vfs_offset(bnum));
 }
 
 static int _trans_write(
@@ -456,7 +454,7 @@ static int _trans_write(
 ) {
     return transcation
         ? ufs_transcation_add(transcation, buf, bnum, off, len, UFS_JORNAL_ADD_COPY)
-        : ufs_fd_pwrite_check(inode->ufs->fd, buf, len, ufs_fd_offset2(bnum, off));
+        : ufs_vfs_pwrite_check(inode->ufs->vfs, buf, len, ufs_vfs_offset2(bnum, off));
 }
 static int _trans_write_block(
     ufs_minode_t* ufs_restrict inode, ufs_transcation_t* ufs_restrict transcation,
@@ -464,7 +462,7 @@ static int _trans_write_block(
 ) {
     return transcation
         ? ufs_transcation_add_block(transcation, buf, bnum, UFS_JORNAL_ADD_COPY)
-        : ufs_fd_pwrite_check(inode->ufs->fd, buf, UFS_BLOCK_SIZE, ufs_fd_offset(bnum));
+        : ufs_vfs_pwrite_check(inode->ufs->vfs, buf, UFS_BLOCK_SIZE, ufs_vfs_offset(bnum));
 }
 
 
@@ -586,15 +584,15 @@ UFS_HIDDEN int ufs_minode_sync_meta(ufs_minode_t* inode) {
     ec = ufs_transcation_commit_all(&transcation);
     ufs_transcation_deinit(&transcation);
     if(ufs_unlikely(ec)) return ec;
-    return ufs_fd_sync(inode->ufs->fd);
+    return ufs_vfs_sync(inode->ufs->vfs);
 }
 UFS_HIDDEN int ufs_minode_sync(ufs_minode_t* inode, int only_data) {
-    return only_data ? ufs_fd_sync(inode->ufs->fd) : ufs_minode_sync_meta(inode);
+    return only_data ? ufs_vfs_sync(inode->ufs->vfs) : ufs_minode_sync_meta(inode);
 }
 
 
 UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block, uint64_t* pblock) {
-    int ec;
+    int ec = 0;
     uint64_t i;
     uint64_t znum;
     for(i = 0; i < block; ++i) {
