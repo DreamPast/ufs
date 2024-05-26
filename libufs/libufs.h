@@ -172,6 +172,8 @@ UFS_API char* ufs_fd_get_memory(ufs_fd_t* fd, size_t* psize);
 #define UFS_O_TRUNC     (1l << 5)  // 打开：截断文件
 #define UFS_O_APPEND    (1l << 6)  // 打开：始终追加写入
 
+#define UFS_O_MASK 0xFF // 打开标志掩码
+
 #define UFS_F_OK 0
 #define UFS_R_OK 4
 #define UFS_W_OK 2
@@ -189,34 +191,182 @@ typedef struct ufs_context_t {
 } ufs_context_t;
 
 
-struct ufs_dir_t;
-typedef struct ufs_dir_t ufs_dir_t;
-
-typedef struct ufs_dirent_t {
-    uint64_t d_ino;
-    uint64_t d_off;
-    size_t d_reclen;
-    uint8_t d_type;
-    char d_name[UFS_NAME_MAX];
-} ufs_dirent_t;
-
-UFS_API int ufs_opendir(ufs_context_t* context, const char* path, ufs_dir_t** pdir);
-UFS_API int ufs_readdir(ufs_dir_t* dir, ufs_dirent_t** pdirent);
-UFS_API int ufs_seekdir(ufs_dir_t* dir, uint64_t off);
-UFS_API int ufs_telldir(ufs_dir_t* dir, uint64_t *poff);
-UFS_API int ufs_rewinddir(ufs_dir_t* dir);
-UFS_API int ufs_closedir(ufs_dir_t* dir);
 
 struct ufs_file_t;
 typedef struct ufs_file_t ufs_file_t;
+/**
+ * 打开文件
+ *
+ * 错误：
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] pfile为NULL
+ *   [UFS_EINVAL] path为NULL或者path为空
+ *   [UFS_EINVAL] （指导性错误）用户试图使用UFS_O_RDONLY和UFS_O_WRONLY合成UFS_O_RDWR
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_EACCESS] 用户对文件不存在指定权限
+ *   [UFS_EACCESS] 试图截断文件但用户不具备写入权限
+ *   [UFS_ENOSPC] 试图创建文件但磁盘空间不足
+ *   [UFS_EEXIST] 文件被指定创建和排他，但是目标文件已存在
+ *   [UFS_EISDIR] 用户试图打开目录
+*/
 UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* path, unsigned long flag, uint16_t mask);
+/**
+ * 创建文件
+ *
+ * 错误：
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] pfile为NULL
+ *   [UFS_EINVAL] path为NULL或者path为空
+ *   [UFS_EINVAL] （指导性错误）用户试图使用UFS_O_RDONLY和UFS_O_WRONLY合成UFS_O_RDWR
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_EACCESS] 用户对文件不存在指定权限
+ *   [UFS_ENOSPC] 试图创建文件但磁盘空间不足
+ *   [UFS_EEXIST] 文件被指定创建和排他，但是目标文件已存在
+ *   [UFS_EISDIR] 用户试图打开目录
+*/
 UFS_API int ufs_creat(ufs_context_t* context, ufs_file_t** pfile, const char* path, uint16_t mask);
+/**
+ * 关闭文件
+ *
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+*/
 UFS_API int ufs_close(ufs_file_t* file);
+/**
+ * 读取文件
+ *
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+ *   [UFS_EBADF] file没有读取权限
+ *   [UFS_EINVAL] buf为NULL
+*/
+UFS_API int ufs_read(ufs_file_t* file, void* buf, size_t len, size_t* pread);
+/**
+ * 写入文件
+ *
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+ *   [UFS_EBADF] file没有写入权限
+ *   [UFS_EINVAL] buf为NULL
+ *   [UFS_ENOSPC] 磁盘空间不足
+*/
+UFS_API int ufs_write(ufs_file_t* file, void* buf, size_t len, size_t* pwriten);
+/**
+ * 含偏移量的读取文件
+ *
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+ *   [UFS_EBADF] file没有读取权限
+ *   [UFS_EINVAL] buf为NULL
+*/
+UFS_API int ufs_pread(ufs_file_t* file, void* buf, size_t len, uint64_t off, size_t* pread);
+/**
+ * 含偏移量的写入文件
+ *
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+ *   [UFS_EBADF] file没有写入权限
+ *   [UFS_EINVAL] buf为NULL
+ *   [UFS_ENOSPC] 磁盘空间不足
+*/
+UFS_API int ufs_pwrite(ufs_file_t* file, void* buf, size_t len, uint64_t off, size_t* pwriten);
+
+#define UFS_SEEK_SET 0 // 设置偏移：从文件起始开始
+#define UFS_SEEK_CUR 1 // 设置偏移：从文件当前位置开始
+#define UFS_SEEK_END 2 // 设置偏移：从文件末尾开始
+/**
+ * 设置偏移
+ *
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+ *   [UFS_EINVAL] off非法
+ *   [UFS_EINVAL] wherence非法
+*/
+UFS_API int ufs_seek(ufs_file_t* file, int64_t off, int wherence, uint64_t* poff);
+/**
+ * 获得偏移
+ *
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+ *   [UFS_EINVAL] poff为NULL
+*/
+UFS_API int ufs_tell(ufs_file_t* file, uint64_t* poff);
 
 
-UFS_API int ufs_readlink(ufs_context_t* context, const char* path, char** presolved, size_t* psize);
-UFS_API int ufs_unlink(ufs_context_t* context, const char* path);
-UFS_API int ufs_link(ufs_context_t* context, const char* dest_path, const char* src_path);
+
+struct ufs_dir_t;
+typedef struct ufs_dir_t ufs_dir_t;
+typedef struct ufs_dirent_t {
+    uint64_t d_ino;
+    uint64_t d_off;
+    char d_name[UFS_NAME_MAX + 1];
+} ufs_dirent_t;
+/*
+ * 打开目录
+ *
+ * 错误：
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] pfile为NULL
+ *   [UFS_EINVAL] path为NULL或者path为空
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ENOTDIR] 用户试图打开目录
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 用户对目录不具备读权限
+*/
+UFS_API int ufs_opendir(ufs_context_t* context, ufs_dir_t** pdir, const char* path);
+
+/**
+ * 读取目录
+ * 
+ * 错误：
+ *   [UFS_EBADF] dir非法
+ *   [UFS_EINVAL] dirent为NULL
+ *   [UFS_ENOENT] 目录已读取完毕
+ *   [UFS_EACCESS] 对目录不具备读入权限
+*/
+UFS_API int ufs_readdir(ufs_dir_t* dir, ufs_dirent_t* dirent);
+/**
+ * 定位目录
+ * 
+ * 错误：
+ *   [UFS_EBADF] dir非法
+*/
+UFS_API int ufs_seekdir(ufs_dir_t* dir, uint64_t off);
+/**
+ * 获得目录定位
+ * 
+ * 错误：
+ *   [UFS_EBADF] dir非法
+ *   [UFS_EINVAL] poff非法
+*/
+UFS_API int ufs_telldir(ufs_dir_t* dir, uint64_t* poff);
+/**
+ * 定位目录到初始状态
+*/
+UFS_API int ufs_rewinddir(ufs_dir_t* dir);
+/**
+ * 关闭目录
+ * 
+ * 错误：
+ *   [UFS_EBADF] dir非法
+*/
+UFS_API int ufs_closedir(ufs_dir_t* dir);
 
 
 

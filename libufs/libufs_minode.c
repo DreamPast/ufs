@@ -415,8 +415,18 @@ do_return:
     return ec;
 }
 UFS_HIDDEN int ufs_minode_deinit(ufs_minode_t* inode) {
-    // 默认不自动同步
-    (void)inode; return 0;
+    int ec = 0;
+    ufs_transcation_t transcation;
+    ufs_transcation_init(&transcation, &inode->ufs->jornal);
+    if(ufs_unlikely(inode->inode.nlink == 0)) {
+        ufs_ilist_lock(&inode->ufs->ilist, &transcation);
+        ec = ufs_ilist_push(&inode->ufs->ilist, inode->inum);
+        ec = _write_inode(&transcation, &inode->inode, inode->inum);
+        if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
+        ufs_ilist_unlock(&inode->ufs->ilist);
+    }
+    ufs_transcation_deinit(&transcation);
+    return ec;
 }
 
 
@@ -469,6 +479,7 @@ static int _minode_pread(
     boff = off % UFS_BLOCK_SIZE;
     ec = _seek_zone(inode, block, &znum);
     if(ufs_unlikely(ec)) return ec;
+    if(ufs_unlikely(znum == 0)) { *pread = 0; return 0; }
     if(boff + len <= UFS_BLOCK_SIZE) {
         ec = _trans_read(inode, transcation, buf, len, znum, boff);
         if(ufs_unlikely(ec)) return ec;
@@ -483,7 +494,7 @@ static int _minode_pread(
     rest_block = len / UFS_BLOCK_SIZE;
     while(rest_block--) {
         ec = _seek_zone(inode, block++, &znum);
-        if(ufs_unlikely(ec)) { *pread = nread; return 0; }
+        if(ufs_unlikely(ec || znum == 0)) { *pread = nread; return 0; }
         ec = _trans_read_block(inode, transcation, buf, znum);
         if(ufs_unlikely(ec)) return ec;
         nread += UFS_BLOCK_SIZE;
@@ -493,7 +504,7 @@ static int _minode_pread(
 
     if(len) {
         ec = _seek_zone(inode, block, &znum);
-        if(ufs_unlikely(ec)) { *pread = nread; return 0; }
+        if(ufs_unlikely(ec || znum == 0)) { *pread = nread; return 0; }
         ec = _trans_read(inode, transcation, buf, len, znum, 0);
         nread += len;
     }

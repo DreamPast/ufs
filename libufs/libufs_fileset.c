@@ -101,8 +101,7 @@ UFS_HIDDEN int ufs_fileset_close(ufs_fileset_t* _fs, uint64_t inum) {
 
     ufs_minode_lock(&node->minode);
     if(--node->minode.share == 0) {
-        ec = ufs_minode_sync(&node->minode, 0);
-        ufs_minode_deinit(&node->minode);
+        ec = ufs_minode_deinit(&node->minode);
         (void)ulrb_remove(&fs->root, &inum, _node_comp, NULL);
         ufs_free(node);
     }

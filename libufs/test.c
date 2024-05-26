@@ -68,18 +68,20 @@ int main(void) {
     errabort(ufs_minode_create(&ufs, &node, NULL));
 
 #if 1
-    _dirent_t dirent;
-    memset(&dirent, 0, sizeof(dirent));
-    strcpy(dirent.name, "temp");
-    dirent.inum = ul_trans_u64_le(node.inum);
-    size_t writen;
     do {
-        ufs_transcation_t transcation;
-        ufs_transcation_init(&transcation, &ufs.jornal);
-        root.inode.mode = 0777 | UFS_S_IFDIR;
-        errabort(ufs_minode_pwrite(&root, &transcation, &dirent, sizeof(dirent), 0, &writen));
-        errabort(ufs_transcation_commit_all(&transcation));
-        ufs_transcation_deinit(&transcation);
+        _dirent_t dirent;
+        memset(&dirent, 0, sizeof(dirent));
+        strcpy(dirent.name, "temp");
+        dirent.inum = ul_trans_u64_le(node.inum);
+        size_t writen;
+        do {
+            ufs_transcation_t transcation;
+            ufs_transcation_init(&transcation, &ufs.jornal);
+            root.inode.mode = 0777 | UFS_S_IFDIR;
+            errabort(ufs_minode_pwrite(&root, &transcation, &dirent, sizeof(dirent), 0, &writen));
+            errabort(ufs_transcation_commit_all(&transcation));
+            ufs_transcation_deinit(&transcation);
+        } while(0);
     } while(0);
 #endif
 
@@ -94,6 +96,17 @@ int main(void) {
     ec = ufs_open(&context, &file, "/temp", UFS_O_RDONLY, 0664);
     errabort(ec);
     ufs_file_debug(file, stdout);
+    ufs_close(file);
+
+    ufs_dir_t* dir;
+    ufs_dirent_t dirent;
+    errabort(ufs_opendir(&context, &dir, "/"));
+    for(;;) {
+        ec = ufs_readdir(dir, &dirent);
+        if(ec == UFS_ENOENT) break;
+        errabort(ec);
+        printf("%" PRIu64 "\t%s\n", dirent.d_ino, dirent.d_name);
+    }
 
     return 0;
 }
