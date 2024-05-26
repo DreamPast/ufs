@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.2.0)
 
-project("libufs_example")
+project("libufs_example" LANGUAGES C)
 set(EXPORT_COMPILE_COMMANDS ON)
 
 # 我们需要为MSVC使用UTF-8模式

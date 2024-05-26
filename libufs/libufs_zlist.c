@@ -8,7 +8,7 @@ static void _trans_zlist(_ufs_zlist_item_t* item) {
 }
 static _ufs_zlist_item_t* _todisk_alloc(const _ufs_zlist_item_t* item) {
     int i;
-    _ufs_zlist_item_t* ret = ul_reinterpret_cast(_ufs_zlist_item_t*, ufs_malloc(UFS_BLOCK_SIZE));
+    _ufs_zlist_item_t* ret = ul_reinterpret_cast(_ufs_zlist_item_t*, ufs_malloc(sizeof(_ufs_zlist_item_t)));
     if(ufs_unlikely(ret == NULL)) return ret;
     ret->next = ul_trans_u64_le(item->next);
     for(i = 0; i < item->num; ++i)

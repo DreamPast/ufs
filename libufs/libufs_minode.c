@@ -319,7 +319,7 @@ do_return:
     return ec;
 }
 static int __alloc_zone_g(ufs_minode_t* ufs_restrict inode, ufs_t* ufs_restrict ufs, uint64_t block, uint64_t* ufs_restrict pznum) {
-    uint64_t tznum, znum;
+    uint64_t tznum = 0, znum;
     int ec;
     ufs_transcation_t transcation;
 
@@ -591,15 +591,13 @@ UFS_HIDDEN int ufs_minode_sync(ufs_minode_t* inode, int only_data) {
 }
 
 
-UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block, uint64_t* pblock) {
+UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block_start, uint64_t block_end) {
     int ec = 0;
-    uint64_t i;
     uint64_t znum;
-    for(i = 0; i < block; ++i) {
-        ec = _alloc_zone(inode, i, &znum);
+    for(; block_start < block_end; ++block_start) {
+        ec = _alloc_zone(inode, block_start, &znum);
         if(ufs_unlikely(ec)) break;
     }
-    *pblock = i;
     return ec;
 }
 

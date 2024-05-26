@@ -165,10 +165,11 @@ UFS_API char* ufs_vfs_get_memory(ufs_vfs_t* vfs, size_t* psize);
 #define UFS_O_RDONLY    (1l << 0)  // 打开：只读
 #define UFS_O_WRONLY    (1l << 1)  // 打开：只写
 #define UFS_O_RDWR      (1l << 2)  // 打开：可读写
-#define UFS_O_CREAT     (1l << 3)  // 打开：如果文件不存在，创建它
-#define UFS_O_EXCL      (1l << 4)  // 打开：使用UFS_O_CREAT生效，如果文件已存在，打开失败
-#define UFS_O_TRUNC     (1l << 5)  // 打开：截断文件
-#define UFS_O_APPEND    (1l << 6)  // 打开：始终追加写入
+#define UFS_O_EXEC      (1l << 3)  // 打开：可执行
+#define UFS_O_CREAT     (1l << 4)  // 打开：如果文件不存在，创建它
+#define UFS_O_EXCL      (1l << 5)  // 打开：使用UFS_O_CREAT生效，如果文件已存在，打开失败
+#define UFS_O_TRUNC     (1l << 6)  // 打开：截断文件
+#define UFS_O_APPEND    (1l << 7)  // 打开：始终追加写入
 
 #define UFS_O_MASK 0xFF // 打开标志掩码
 
@@ -208,7 +209,6 @@ typedef struct ufs_statvfs_t {
     uint64_t f_files;
     uint64_t f_ffree;
     uint64_t f_favail;
-
 } ufs_statvfs_t;
 /**
  * 获取磁盘信息
@@ -289,7 +289,7 @@ UFS_API int ufs_read(ufs_file_t* file, void* buf, size_t len, size_t* pread);
  *   [UFS_EINVAL] buf为NULL
  *   [UFS_ENOSPC] 磁盘空间不足
 */
-UFS_API int ufs_write(ufs_file_t* file, void* buf, size_t len, size_t* pwriten);
+UFS_API int ufs_write(ufs_file_t* file, const void* buf, size_t len, size_t* pwriten);
 /**
  * 含偏移量的读取文件
  *
@@ -308,7 +308,7 @@ UFS_API int ufs_pread(ufs_file_t* file, void* buf, size_t len, uint64_t off, siz
  *   [UFS_EINVAL] buf为NULL
  *   [UFS_ENOSPC] 磁盘空间不足
 */
-UFS_API int ufs_pwrite(ufs_file_t* file, void* buf, size_t len, uint64_t off, size_t* pwriten);
+UFS_API int ufs_pwrite(ufs_file_t* file, const void* buf, size_t len, uint64_t off, size_t* pwriten);
 
 #define UFS_SEEK_SET 0 // 设置偏移：从文件起始开始
 #define UFS_SEEK_CUR 1 // 设置偏移：从文件当前位置开始
@@ -336,7 +336,7 @@ UFS_API int ufs_tell(ufs_file_t* file, uint64_t* poff);
  * 错误：
  *   [UFS_EBADF] file为NULL
 */
-UFS_API int ufs_fallocate(ufs_file_t* file, uint64_t size);
+UFS_API int ufs_fallocate(ufs_file_t* file, uint64_t off, uint64_t len);
 /**
  * 截断文件
  * 
@@ -353,6 +353,7 @@ UFS_API int ufs_ftruncate(ufs_file_t* file, uint64_t size);
  *   [UFS_EBADF] file为NULL
 */
 UFS_API int ufs_fsync(ufs_file_t* file, int only_data);
+
 
 
 struct ufs_dir_t;
@@ -545,9 +546,9 @@ typedef struct ufs_stat_t {
     uint64_t st_blksize; // 块大小
     uint64_t st_blocks; // 使用块数
 
-    int64_t st_ctime; // 创建时间
-    int64_t st_atime; // 修改时间
-    int64_t st_mtime; // 访问时间
+    int64_t st_ctim; // 创建时间
+    int64_t st_atim; // 修改时间
+    int64_t st_mtim; // 访问时间
 } ufs_stat_t;
 
 /**
@@ -568,7 +569,6 @@ UFS_API int ufs_fstat(ufs_file_t* file, ufs_stat_t* stat);
  *   [UFS_ENOMEM] 无法分配内存
  *   [UFS_ENOENT] 路径中存在不存在的目录
  *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
- *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
  *   [UFS_ENOSPC] 试图创建链接但磁盘空间不足
  *
  *   [UFS_EINVAL] context非法
@@ -576,7 +576,26 @@ UFS_API int ufs_fstat(ufs_file_t* file, ufs_stat_t* stat);
  *   [UFS_EINVAL] path为NULL或path为空
 */
 UFS_API int ufs_stat(ufs_context_t* context, const char* path, ufs_stat_t* stat);
-
+/**
+ * 更改文件权限
+*/
+UFS_API int ufs_chmod(ufs_context_t* context, const char* path, uint16_t mask);
+/**
+ * 更改文件所属者
+*/
+UFS_API int ufs_chown(ufs_context_t* context, const char* path, int32_t uid, int32_t gid);
+/**
+ * 测试文件
+*/
+UFS_API int ufs_access(ufs_context_t* context, const char* path, int access);
+/**
+ * 更改文件时间
+*/
+UFS_API int ufs_utimes(ufs_context_t* context, const char* path, int64_t* ctime, int64_t* atime, int64_t* mtime);
+/**
+ * 截断文件
+*/
+UFS_API int ufs_truncate(ufs_context_t* context, const char* path, uint64_t size);
 
 #ifdef __cplusplus
 }

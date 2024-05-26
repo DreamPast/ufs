@@ -295,7 +295,7 @@ UFS_HIDDEN int ufs_minode_pwrite(
 );
 UFS_HIDDEN int ufs_minode_sync_meta(ufs_minode_t* inode);
 UFS_HIDDEN int ufs_minode_sync(ufs_minode_t* inode, int only_data);
-UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block, uint64_t* pblock);
+UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block_start, uint64_t block_end);
 UFS_HIDDEN int ufs_minode_shrink(ufs_minode_t* inode, uint64_t block);
 UFS_HIDDEN int ufs_minode_resize(ufs_minode_t* inode, uint64_t size);
 UFS_HIDDEN void _ufs_inode_debug(const ufs_inode_t* inode, FILE* fp, int space);

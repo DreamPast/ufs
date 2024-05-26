@@ -79,7 +79,7 @@ static int _search_dir(ufs_minode_t* minode, const char* target, uint64_t *pinum
         ec = ufs_minode_pread(minode, &transcation, &dirent, sizeof(dirent), off, &read);
         if(ufs_unlikely(ec)) goto do_return;
         if(read != sizeof(dirent)) break;
-        if(memcmp(target, dirent.name, len) == 0) {
+        if(memcmp(target, dirent.name, len) == 0 && dirent.name[len] == 0) {
             *pinum = ul_trans_u64_le(dirent.inum);
             goto do_return;
         }
@@ -213,25 +213,8 @@ static int _ppath2inum(ufs_context_t* ufs_restrict context, const char* ufs_rest
     return __ppath2inum(context, path, pminode, pfname, 0);
 }
 
-/**
- * 打开文件，不对文件本身做检查
- * 如果creat_inum不为0，则创建时直接使用creat_inum而不是使用mode创建
- *
- * 错误：
- *   [UFS_ENAMETOOLONG] 文件名过长
- *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
- *   [UFS_ELOOP] 路径中符号链接层数过深
- *   [UFS_ENOMEM] 无法分配内存
- *   [UFS_ENOENT] 路径中存在不存在的目录
- *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
- *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
- *   [UFS_EACCESS] 用户对文件不存在指定权限
- *   [UFS_EACCESS] 试图截断文件但用户不具备写入权限
- *   [UFS_ENOSPC] 试图创建文件但磁盘空间不足
- *   [UFS_EEXIST] 文件被指定创建和排他，但是目标文件已存在
- *   [UFS_EMLINK] 文件链接数过多
-*/
-static int _open_ex(ufs_context_t* context, ufs_minode_t** pminode, const char* path, unsigned long flag, uint16_t mode, uint64_t creat_inum) {
+#define _UFS_O_NOFOLLOW 0x100 // 打开（内部）：追随符号链接
+static int __open_ex(ufs_context_t* context, ufs_minode_t** pminode, const char* path, unsigned long flag, uint16_t mode, uint64_t creat_inum) {
     ufs_minode_t* file_minode = NULL;
     uint64_t inum = 0;
     int ec;
@@ -312,6 +295,49 @@ static int _open_ex(ufs_context_t* context, ufs_minode_t** pminode, const char* 
     *pminode = file_minode;
     return 0;
 }
+
+/**
+ * 打开文件，不对文件本身做检查
+ * 如果creat_inum不为0，则创建时直接使用creat_inum而不是使用mode创建
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_EACCESS] 用户对文件不存在指定权限
+ *   [UFS_EACCESS] 试图截断文件但用户不具备写入权限
+ *   [UFS_ENOSPC] 试图创建文件但磁盘空间不足
+ *   [UFS_EEXIST] 文件被指定创建和排他，但是目标文件已存在
+ *   [UFS_EMLINK] 文件链接数过多
+*/
+static int _open_ex(ufs_context_t* context, ufs_minode_t** pminode, const char* path, unsigned long flag, uint16_t mode, uint64_t creat_inum) {
+    int ec;
+    int stop = 0;
+    ufs_minode_t* minode;
+
+    ec = __open_ex(context, &minode, path, flag, mode, creat_inum);
+    if(ufs_unlikely(ec)) return ec;
+do_again:
+    if(!(mode & _UFS_O_NOFOLLOW) && UFS_S_ISLNK(minode->inode.mode)) {
+        char* resolved;
+        ufs_minode_t* minode2;
+        if(stop++ >= UFS_SYMBOL_LOOP_LIMIT) { ufs_fileset_close(&context->ufs->fileset, minode->inum); return ELOOP; }
+        ec = _readlink(context, minode, &resolved);
+        if(ufs_unlikely(ec)) { ufs_fileset_close(&context->ufs->fileset, minode->inum); return ec; }
+        ec = __open_ex(context, &minode2, resolved, flag, mode, creat_inum);
+        ufs_free(resolved);
+        ufs_fileset_close(&context->ufs->fileset, minode->inum);
+        minode = minode2;
+        if(ufs_unlikely(ec)) { ufs_fileset_close(&context->ufs->fileset, minode->inum); return ec; }
+        goto do_again;
+    }
+    *pminode = minode;
+    return 0;
+}
 /**
  * 打开文件，不对文件本身做检查
  *
@@ -350,31 +376,17 @@ UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* pat
     ufs_file_t* file;
     int ec;
     ufs_minode_t* minode;
-    int stop = 0;
 
     if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
     if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
     if(ufs_unlikely((flag & UFS_O_RDONLY) && (flag & UFS_O_WRONLY))) return UFS_EINVAL;
 
     mask &= context->umask & 0777u;
-    ec = _open(context, &minode, path, flag, (mask & 0777) | UFS_S_IFREG);
+    ec = _open(context, &minode, path, (flag & 0xFF), (mask & 0777) | UFS_S_IFREG);
     if(ufs_unlikely(ec)) return ec;
-    if(!UFS_S_ISREG(minode->inode.mode)) {
-        if(UFS_S_ISDIR(minode->inode.mode)) {
-            ufs_fileset_close(&context->ufs->fileset, minode->inum);
-            return UFS_EISDIR;
-        } else {
-            char* resolved;
-            ufs_minode_lock(minode);
-            ec = _readlink(context, minode, &resolved);
-            ufs_minode_unlock(minode);
-            ufs_fileset_close(&context->ufs->fileset, minode->inum);
-            if(ufs_unlikely(ec)) return ec;
-            if(stop++ >= UFS_SYMBOL_LOOP_LIMIT) return ELOOP;
-            ec = _open(context, &minode, path, flag, mask | UFS_S_IFREG);
-            ufs_free(resolved);
-            if(ufs_unlikely(ec)) return ec;
-        }
+    if(UFS_S_ISDIR(minode->inode.mode)) {
+        ufs_fileset_close(&context->ufs->fileset, minode->inum);
+        return UFS_EISDIR;
     }
 
     file = ul_reinterpret_cast(ufs_file_t*, ufs_malloc(sizeof(ufs_file_t)));
@@ -388,12 +400,14 @@ UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* pat
     if(flag & UFS_O_RDONLY) file->flag |= UFS_R_OK;
     if(flag & UFS_O_WRONLY) file->flag |= UFS_W_OK;
     if(flag & UFS_O_RDWR) file->flag |= UFS_R_OK | UFS_W_OK;
+    if(flag & UFS_O_EXEC) file->flag |= UFS_X_OK;
 
     do {
         int access = _check_perm(context->uid, context->gid, &minode->inode);
         ufs_minode_lock(minode);
         if((file->flag & UFS_R_OK) && !(access & UFS_R_OK)) ec = EACCES;
         if((file->flag & UFS_W_OK) && !(access & UFS_W_OK)) ec = EACCES;
+        if((file->flag & UFS_X_OK) && !(access & UFS_X_OK)) ec = EACCES;
         ufs_minode_unlock(minode);
         if(ufs_unlikely(ec)) { ufs_fileset_close(&context->ufs->fileset, minode->inum); return ec; }
     } while(0);
@@ -442,7 +456,7 @@ UFS_API int ufs_read(ufs_file_t* file, void* buf, size_t len, size_t* pread) {
     return 0;
 }
 
-UFS_API int ufs_write(ufs_file_t* file, void* buf, size_t len, size_t* pwriten) {
+UFS_API int ufs_write(ufs_file_t* file, const void* buf, size_t len, size_t* pwriten) {
     size_t writen;
     int ec;
     pwriten = pwriten ? pwriten : &writen;
@@ -482,7 +496,7 @@ UFS_API int ufs_pread(ufs_file_t* file, void* buf, size_t len, uint64_t off, siz
     return 0;
 }
 
-UFS_API int ufs_pwrite(ufs_file_t* file, void* buf, size_t len, uint64_t off, size_t* pwriten) {
+UFS_API int ufs_pwrite(ufs_file_t* file, const void* buf, size_t len, uint64_t off, size_t* pwriten) {
     size_t writen;
     int ec;
     pwriten = pwriten ? pwriten : &writen;
@@ -549,14 +563,13 @@ UFS_API int ufs_tell(ufs_file_t* file, uint64_t* poff) {
     return 0;
 }
 
-UFS_API int ufs_fallocate(ufs_file_t* file, uint64_t size) {
+UFS_API int ufs_fallocate(ufs_file_t* file, uint64_t off, uint64_t len) {
     int ec;
-    uint64_t block;
     if(ufs_unlikely(file == NULL)) return UFS_EBADF;
     _file_lock(file);
     ufs_minode_lock(file->minode);
-    ec = ufs_minode_fallocate(file->minode, (size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE, &block);
-    (void)block;
+    ec = ufs_minode_fallocate(file->minode, (off + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE,
+        (off + len + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE + 1);
     ufs_minode_unlock(file->minode);
     _file_unlock(file);
     return ec;
@@ -707,7 +720,7 @@ UFS_API int ufs_mkdir(ufs_context_t* context, const char* path, uint16_t mode) {
     if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
     if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
 
-    ec = _open(context, &minode, path, UFS_O_CREAT | UFS_O_EXCL, (mode & UFS_S_IALL) | UFS_S_IFDIR);
+    ec = _open(context, &minode, path, UFS_O_CREAT | UFS_O_EXCL | _UFS_O_NOFOLLOW, (mode & UFS_S_IALL) | UFS_S_IFDIR);
     if(ufs_unlikely(ec)) return ec;
     return ufs_fileset_close(&context->ufs->fileset, minode->inum);
 }
@@ -795,7 +808,7 @@ UFS_API int ufs_link(ufs_context_t* context, const char* target, const char* sou
     ec = _open(context, &sinode, source, 0, 0);
     if(ufs_unlikely(ec)) return ec;
     if(ufs_likely(!UFS_S_ISDIR(sinode->inode.mode)))
-        ec = _open_ex(context, &tinode, target, UFS_O_CREAT | UFS_O_EXCL, 0777, sinode->inum);
+        ec = _open_ex(context, &tinode, target, UFS_O_CREAT | UFS_O_EXCL | _UFS_O_NOFOLLOW, 0777, sinode->inum);
     else ec = EISDIR;
     ufs_fileset_close(&context->ufs->fileset, sinode->inum);
     if(ufs_unlikely(ec)) return ec;
@@ -815,7 +828,7 @@ UFS_API int ufs_symlink(ufs_context_t* context, const char* target, const char* 
     len = strlen(source) + 1;
     if(len > UFS_BLOCK_SIZE) return UFS_EOVERFLOW;
 
-    ec = _open(context, &minode, target, UFS_O_CREAT | UFS_O_EXCL, 0777 | UFS_S_IFLNK);
+    ec = _open(context, &minode, target, UFS_O_CREAT | UFS_O_EXCL | _UFS_O_NOFOLLOW, 0777 | UFS_S_IFLNK);
     if(ufs_unlikely(ec)) return ec;
 
     ufs_transcation_init(&transcation, &context->ufs->jornal);
@@ -839,7 +852,7 @@ UFS_API int ufs_readlink(ufs_context_t* context, const char* source, char** pres
     if(ufs_unlikely(presolved == NULL)) return UFS_EINVAL;
 
 
-    ec = _open(context, &minode, source, 0, 0);
+    ec = _open(context, &minode, source, _UFS_O_NOFOLLOW, 0);
     if(ufs_unlikely(ec)) return ec;
     if(ufs_likely(UFS_S_ISLNK(minode->inode.mode))) ec = _readlink(context, minode, presolved);
     else ec = UFS_EFTYPE;
@@ -858,9 +871,9 @@ static void _stat(ufs_minode_t* inode, ufs_stat_t* stat) {
     stat->st_size = inode->inode.size;
     stat->st_blksize = UFS_BLOCK_SIZE;
     stat->st_blocks = inode->inode.blocks;
-    stat->st_ctime = inode->inode.ctime;
-    stat->st_atime = inode->inode.atime;
-    stat->st_mtime = inode->inode.mtime;
+    stat->st_ctim = inode->inode.ctime;
+    stat->st_atim = inode->inode.atime;
+    stat->st_mtim = inode->inode.mtime;
 }
 UFS_API int ufs_fstat(ufs_file_t* file, ufs_stat_t* stat) {
     if(ufs_unlikely(file == NULL)) return UFS_EBADF;
@@ -873,19 +886,104 @@ UFS_API int ufs_fstat(ufs_file_t* file, ufs_stat_t* stat) {
 }
 UFS_API int ufs_stat(ufs_context_t* context, const char* path, ufs_stat_t* stat) {
     int ec;
-    ufs_file_t* file;
+    ufs_minode_t* minode;
 
     if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
     if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
 
-    ec = ufs_open(context, &file, path, 0, 0664);
+    ec = _open(context, &minode, path, 0, 0664);
     if(ufs_unlikely(ec)) return ec;
-    ec = ufs_fstat(file, stat);
-    ufs_close(file);
+
+    ufs_minode_lock(minode);
+    _stat(minode, stat);
+    ufs_minode_unlock(minode);
+    ufs_fileset_close(&context->ufs->fileset, minode->inum);
+
+    return 0;
+}
+
+UFS_API int ufs_chmod(ufs_context_t* context, const char* path, uint16_t mask) {
+    int ec;
+    ufs_minode_t* minode;
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+    ec = _open(context, &minode, path, 0, 0664);
+    if(ufs_unlikely(ec)) return ec;
+    ufs_minode_lock(minode);
+    if(_checkuid(context->uid, minode->inode.uid)) {
+        minode->inode.mode = (minode->inode.mode & UFS_S_IFMT) | mask;
+    } else ec = EACCES;
+    ufs_minode_unlock(minode);
+    ufs_fileset_close(&context->ufs->fileset, minode->inum);
     return ec;
 }
 
+UFS_API int ufs_chown(ufs_context_t* context, const char* path, int32_t uid, int32_t gid) {
+    int ec;
+    ufs_minode_t* minode;
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+    ec = _open(context, &minode, path, 0, 0664);
+    if(ufs_unlikely(ec)) return ec;
+    ufs_minode_lock(minode);
+    if(_checkuid(context->uid, minode->inode.uid)) {
+        if(uid >= 0) minode->inode.uid = uid;
+        if(gid >= 0) minode->inode.gid = gid;
+    } else ec = EACCES;
+    ufs_minode_unlock(minode);
+    ufs_fileset_close(&context->ufs->fileset, minode->inum);
+    return ec;
+}
 
+UFS_API int ufs_access(ufs_context_t* context, const char* path, int access) {
+    int ec, x;
+    ufs_minode_t* minode;
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+    ec = _open(context, &minode, path, 0, 0664);
+    if(ufs_unlikely(ec)) return ec;
+    ufs_minode_lock(minode);
+    x = _check_perm(context->uid, context->gid, &minode->inode);
+    ufs_minode_unlock(minode);
+
+    if((access & UFS_R_OK) && !(x & UFS_R_OK)) ec = EACCES;
+    if((access & UFS_W_OK) && !(x & UFS_W_OK)) ec = EACCES;
+    if((access & UFS_X_OK) && !(x & UFS_X_OK)) ec = EACCES;
+    ufs_fileset_close(&context->ufs->fileset, minode->inum);
+    return ec;
+}
+
+UFS_API int ufs_utimes(ufs_context_t* context, const char* path, int64_t* ctime, int64_t* atime, int64_t* mtime) {
+    int ec;
+    ufs_minode_t* minode;
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+    ec = _open(context, &minode, path, 0, 0664);
+    if(ufs_unlikely(ec)) return ec;
+    ufs_minode_lock(minode);
+    if(_checkuid(context->uid, minode->inode.uid)) {
+        if(ctime) minode->inode.ctime = *ctime;
+        if(atime) minode->inode.atime = *atime;
+        if(mtime) minode->inode.mtime = *mtime;
+    } else ec = EACCES;
+    ufs_minode_unlock(minode);
+    ufs_fileset_close(&context->ufs->fileset, minode->inum);
+    return ec;
+}
+UFS_API int ufs_truncate(ufs_context_t* context, const char* path, uint64_t size) {
+    int ec;
+    ufs_minode_t* minode;
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+    ec = _open(context, &minode, path, 0, 0664);
+    if(ufs_unlikely(ec)) return ec;
+    ufs_minode_lock(minode);
+    if(!(_check_perm(context->uid, context->gid, &minode->inode) & UFS_W_OK)) ec = EACCES;
+    else ec = ufs_minode_resize(minode, size);
+    ufs_minode_unlock(minode);
+    ufs_fileset_close(&context->ufs->fileset, minode->inum);
+    return ec;
+}
 
 UFS_HIDDEN void ufs_file_debug(const ufs_file_t* file, FILE* fp) {
     fprintf(fp, "file [%p]\n", ufs_const_cast(void*, file));

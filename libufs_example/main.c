@@ -34,9 +34,9 @@ static void print_stat(ufs_stat_t* stat, FILE* fp) {
     fprintf(fp, "\tblock size: %" PRIu64 "\n", stat->st_blksize);
     fprintf(fp, "\tblock: %" PRIu64 "\n", stat->st_blocks);
 
-    fprintf(fp, "\tcreate time: "); ufs_ptime(stat->st_ctime, NULL, fp); fputc('\n', fp);
-    fprintf(fp, "\tmodify time: "); ufs_ptime(stat->st_mtime, NULL, fp); fputc('\n', fp);
-    fprintf(fp, "\taccess time: "); ufs_ptime(stat->st_atime, NULL, fp); fputc('\n', fp);
+    fprintf(fp, "\tcreate time: "); ufs_ptime(stat->st_ctim, NULL, fp); fputc('\n', fp);
+    fprintf(fp, "\tmodify time: "); ufs_ptime(stat->st_mtim, NULL, fp); fputc('\n', fp);
+    fprintf(fp, "\taccess time: "); ufs_ptime(stat->st_atim, NULL, fp); fputc('\n', fp);
 
 }
 
@@ -71,7 +71,6 @@ int main(void) {
 
     errabort(ufs_open(&context, &file, "/dir/temp_hard", UFS_O_RDWR, 0664));
     errabort(ufs_ftruncate(file, 1024));
-    errabort(ufs_fallocate(file, 114514));
     errabort(ufs_fstat(file, &stat));
     puts("");
     print_stat(&stat, stdout);

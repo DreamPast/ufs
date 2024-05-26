@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.2.0)
 
-project("libufs")
+project("libufs" LANGUAGES C)
 set(EXPORT_COMPILE_COMMANDS ON)
 
 # 我们需要为MSVC使用UTF-8模式
@@ -8,7 +8,7 @@ add_compile_options("$<$<C_COMPILER_ID:MSVC>:/utf-8>")
 add_compile_options("$<$<CXX_COMPILER_ID:MSVC>:/utf-8>")
 
 option(LIBUFS_NO_THREAD_SAFE "关闭多线程安全" OFF)
-option(LIBUFS_BUILD_DLL "构建动态链接库" ON)
+option(LIBUFS_BUILD_DLL "构建动态链接库" OFF)
 
 set(LIBUFS_SRC_FILES
 	libufs_thread.c

@@ -222,7 +222,7 @@ UFS_API int ufs_new_format(ufs_t** pufs, ufs_vfs_t* vfs, uint64_t size) {
         for(; i >= e; --i) {
             ec = ufs_ilist_push(&ufs->ilist, i);
             if(ufs_unlikely(ec)) break;
-            if(transcation.num == UFS_JORNAL_NUM) {
+            if(transcation.num >= UFS_JORNAL_NUM - UFS_ILIST_CACHE_LIST_LIMIT) {
                 ec = ufs_transcation_commit_all(&transcation);
                 if(ufs_unlikely(ec)) break;
             }
@@ -246,7 +246,7 @@ UFS_API int ufs_new_format(ufs_t** pufs, ufs_vfs_t* vfs, uint64_t size) {
         for(; i >= e; --i) {
             ec = ufs_zlist_push(&ufs->zlist, i);
             if(ufs_unlikely(ec)) break;
-            if(transcation.num == UFS_JORNAL_NUM) {
+            if(transcation.num == UFS_JORNAL_NUM - UFS_ZLIST_CACHE_LIST_LIMIT) {
                 ec = ufs_transcation_commit_all(&transcation);
                 if(ufs_unlikely(ec)) break;
             }
