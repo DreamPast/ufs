@@ -65,7 +65,7 @@ UFS_HIDDEN int ufs_transcation_read_block(ufs_transcation_t* ufs_restrict transc
         if(transcation->ops[i].bnum == bnum) {
             memcpy(buf, transcation->ops[i].buf, UFS_BLOCK_SIZE);
             return 0;
-        }    
+        }
     return ufs_jornal_read_block(transcation->jornal, buf, bnum);
 }
 UFS_HIDDEN int ufs_transcation_read(ufs_transcation_t* ufs_restrict transcation, void* ufs_restrict buf, uint64_t bnum, size_t off, size_t len) {

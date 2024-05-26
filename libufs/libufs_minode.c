@@ -424,6 +424,9 @@ UFS_HIDDEN int ufs_minode_deinit(ufs_minode_t* inode) {
         ec = _write_inode(&transcation, &inode->inode, inode->inum);
         if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
         ufs_ilist_unlock(&inode->ufs->ilist);
+    } else {
+        ec = _write_inode(&transcation, &inode->inode, inode->inum);
+        if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
     }
     ufs_transcation_deinit(&transcation);
     return ec;
@@ -515,6 +518,7 @@ UFS_HIDDEN int ufs_minode_pread(
     void* ufs_restrict buf, size_t len, uint64_t off, size_t* ufs_restrict pread
 ) {
     if(off + len > inode->inode.size) len = inode->inode.size - off;
+    inode->inode.atime = ufs_time(0);
     return _minode_pread(inode, transcation, ul_reinterpret_cast(char*, buf), len, off, pread);
 }
 
@@ -568,14 +572,8 @@ UFS_HIDDEN int ufs_minode_pwrite(
 ) {
     int ec = _minode_pwrite(inode, transcation, ul_reinterpret_cast(const char*, buf), len, off, pwriten);
     if(ufs_unlikely(ec)) return ec;
-    if(off + len > inode->inode.size) {
-        const uint64_t osize = inode->inode.size;
-        inode->inode.size = off + len;
-        if(transcation) ec = _write_inode(transcation, &inode->inode, inode->inum);
-        else ec = _write_inode_direct(&inode->ufs->jornal, &inode->inode, inode->inum);
-        if(ufs_unlikely(ec)) inode->inode.size = osize;
-        return ec;
-    }
+    inode->inode.mtime = ufs_time(0);
+    inode->inode.size = ufs_max(inode->inode.size, off + len);
     return 0;
 }
 
@@ -600,7 +598,7 @@ UFS_HIDDEN int ufs_minode_fallocate(ufs_minode_t* inode, uint64_t block, uint64_
     uint64_t i;
     uint64_t znum;
     for(i = 0; i < block; ++i) {
-        ec = _alloc_zone(inode, block, &znum);
+        ec = _alloc_zone(inode, i, &znum);
         if(ufs_unlikely(ec)) break;
     }
     *pblock = i;

@@ -45,6 +45,7 @@ extern "C" {
 #define UFS_EOVERFLOW    -18 // 错误：值过大
 #define UFS_ENOSPC       -19 // 错误：磁盘空间不足
 #define UFS_EEXIST       -20 // 错误：文件已存在
+#define UFS_ENOTEMPTY    -21 // 错误：目录非空
 
 // 获得error对应的解释字符串
 UFS_API const char* ufs_strerror(int error);
@@ -303,7 +304,29 @@ UFS_API int ufs_seek(ufs_file_t* file, int64_t off, int wherence, uint64_t* poff
  *   [UFS_EINVAL] poff为NULL
 */
 UFS_API int ufs_tell(ufs_file_t* file, uint64_t* poff);
-
+/**
+ * 为文件预分配大小
+ * 
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+*/
+UFS_API int ufs_fallocate(ufs_file_t* file, uint64_t size);
+/**
+ * 截断文件
+ * 
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+ *   [UFS_EBADF] file没有写权限
+ *   [UFS_EACCESS] 用户对文件没有写权限
+*/
+UFS_API int ufs_ftruncate(ufs_file_t* file, uint64_t size);
+/**
+ * 刷新文件
+ * 
+ * 错误：
+ *   [UFS_EBADF] file为NULL
+*/
+UFS_API int ufs_fsync(ufs_file_t* file, int only_data);
 
 
 struct ufs_dir_t;
@@ -333,7 +356,7 @@ UFS_API int ufs_opendir(ufs_context_t* context, ufs_dir_t** pdir, const char* pa
 
 /**
  * 读取目录
- * 
+ *
  * 错误：
  *   [UFS_EBADF] dir非法
  *   [UFS_EINVAL] dirent为NULL
@@ -343,14 +366,14 @@ UFS_API int ufs_opendir(ufs_context_t* context, ufs_dir_t** pdir, const char* pa
 UFS_API int ufs_readdir(ufs_dir_t* dir, ufs_dirent_t* dirent);
 /**
  * 定位目录
- * 
+ *
  * 错误：
  *   [UFS_EBADF] dir非法
 */
 UFS_API int ufs_seekdir(ufs_dir_t* dir, uint64_t off);
 /**
  * 获得目录定位
- * 
+ *
  * 错误：
  *   [UFS_EBADF] dir非法
  *   [UFS_EINVAL] poff非法
@@ -358,16 +381,175 @@ UFS_API int ufs_seekdir(ufs_dir_t* dir, uint64_t off);
 UFS_API int ufs_telldir(ufs_dir_t* dir, uint64_t* poff);
 /**
  * 定位目录到初始状态
+ *
+ * 错误：
+ *   [UFS_EBADF] dir非法
 */
 UFS_API int ufs_rewinddir(ufs_dir_t* dir);
 /**
  * 关闭目录
- * 
+ *
  * 错误：
  *   [UFS_EBADF] dir非法
 */
 UFS_API int ufs_closedir(ufs_dir_t* dir);
 
+/**
+ * 创建目录
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_ENOSPC] 试图创建目录但磁盘空间不足
+ *
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] path为NULL或path为空
+ *   [UFS_EEXIST] 目录已经存在
+*/
+UFS_API int ufs_mkdir(ufs_context_t* context, const char* path, uint16_t mode);
+/**
+ * 删除目录
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_ENOSPC] 试图创建目录但磁盘空间不足
+ *
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] path为NULL或path为空
+ *   [UFS_ENOENT] 目录不存在
+ *   [UFS_ENOTDIR] 不是目录
+*/
+UFS_API int ufs_rmdir(ufs_context_t* context, const char* path);
+/**
+ * 删除文件（包括符号链接）
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_ENOSPC] 试图创建目录但磁盘空间不足
+ *
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] path为NULL或path为空
+ *   [UFS_ENOENT] 目录不存在
+ *   [UFS_EISDIR] 要删除的是目录
+*/
+UFS_API int ufs_unlink(ufs_context_t* context, const char* path);
+/**
+ * 创建硬链接
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_ENOSPC] 试图创建链接但磁盘空间不足
+ *
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] path为NULL或path为空
+ *   [UFS_EEXIST] target已经存在
+ *   [UFS_EISDIR] 试图链接目录
+ *   [UFS_EMLINK] 硬链接数量过多
+*/
+UFS_API int ufs_link(ufs_context_t* context, const char* target, const char* source);
+/**
+ * 创建符号链接
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_ENOSPC] 试图创建链接但磁盘空间不足
+ *
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] path为NULL或path为空
+ *   [UFS_EEXIST] target已经存在
+ *   [UFS_EOVERFLOW] source过长
+*/
+UFS_API int ufs_symlink(ufs_context_t* context, const char* target, const char* source);
+/**
+ * 创建符号链接
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] path为NULL或path为空
+ *   [UFS_EINVAL] presolved为NULL
+ *   [UFS_EEXIST] target已经存在
+ *   [UFS_EFTYPE] source不为符号链接
+*/
+UFS_API int ufs_readlink(ufs_context_t* context, const char* source, char** presolved);
+
+typedef struct ufs_stat_t {
+    uint64_t st_ino; // inode编号
+    uint16_t st_mode; // 文件模式与类型
+    uint32_t st_nlink; // 链接数
+    int32_t st_uid; // 所属者UID
+    int32_t st_gid; // 所属者GID
+    uint64_t st_size; // 文件大小
+    uint64_t st_blksize; // 块大小
+    uint64_t st_blocks; // 使用块数
+
+    int64_t st_ctime; // 创建时间
+    int64_t st_atime; // 修改时间
+    int64_t st_mtime; // 访问时间
+} ufs_stat_t;
+
+/**
+ * 获取文件状态
+ *
+ * 错误：
+ *   [UFS_EINVAL] stat为NULL
+ *   [UFS_EBADF] file非法
+*/
+UFS_API int ufs_fstat(ufs_file_t* file, ufs_stat_t* stat);
+/**
+ * 获取文件状态
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_ENOSPC] 试图创建链接但磁盘空间不足
+ *
+ *   [UFS_EINVAL] context非法
+ *   [UFS_EINVAL] stat为NULL
+ *   [UFS_EINVAL] path为NULL或path为空
+*/
+UFS_API int ufs_stat(ufs_context_t* context, const char* path, ufs_stat_t* stat);
 
 
 #ifdef __cplusplus

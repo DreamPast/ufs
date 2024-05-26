@@ -21,7 +21,8 @@ UFS_API const char* ufs_strerror(int error) {
         "[UFS_EILSEQ] invalid or incomplete multibye or wide character",
         "[UFS_EOVERFLOW] value too large for defined data type",
         "[UFS_ENOSPC] no space left on device",
-        "[UFS_EEXIST] file exists"
+        "[UFS_EEXIST] file exists",
+        "[UFS_ENOTEMPTY] directory not empty",
     };
     static const int TABLE_CNT = sizeof(TABLE) / sizeof(TABLE[0]);
     if(error >= 0) return strerror(error);

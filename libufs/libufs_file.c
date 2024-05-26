@@ -32,7 +32,6 @@ static int _readlink(ufs_context_t* ufs_restrict context, ufs_minode_t* minode, 
 
     ec = ufs_minode_pread(minode, &transcation, resolved, UFS_BLOCK_SIZE, 0, &read);
     if(ufs_unlikely(ec)) goto do_return;
-    if(ufs_unlikely(read != UFS_BLOCK_SIZE)) { ec = UFS_ESTALE; goto do_return; }
     *presolved = resolved; resolved = NULL;
 
 do_return:
@@ -47,7 +46,27 @@ static int _dirent_empty(const _dirent_t* dirent) {
         if(dirent->name[i]) return 0;
     return 1;
 }
-static int _search_dir(ufs_minode_t* minode, const char* target, uint64_t *pinum, size_t len) {
+static int _shrink_dir(ufs_minode_t* minode) {
+    int ec;
+    ufs_transcation_t transcation;
+    uint64_t off = minode->inode.size;
+    _dirent_t dirent;
+    size_t read;
+    ufs_transcation_init(&transcation, &minode->ufs->jornal);
+    for(;;) {
+        ec = ufs_minode_pread(minode, &transcation, &dirent, sizeof(dirent), off - sizeof(dirent), &read);
+        if(ufs_unlikely(ec)) goto do_return;
+        if(read != sizeof(dirent)) break;
+        if(!_dirent_empty(&dirent)) break;
+        off -= sizeof(dirent);
+    }
+
+do_return:
+    ufs_minode_resize(minode, off);
+    ufs_transcation_deinit(&transcation);
+    return 0;
+}
+static int _search_dir(ufs_minode_t* minode, const char* target, uint64_t *pinum, size_t len, uint64_t* poff) {
     int ec;
     ufs_transcation_t transcation;
     _dirent_t dirent;
@@ -69,10 +88,25 @@ static int _search_dir(ufs_minode_t* minode, const char* target, uint64_t *pinum
     ec = UFS_ENOENT;
 
 do_return:
+    if(poff) *poff = off;
     ufs_transcation_deinit(&transcation);
     return ec;
 }
+static int _delete_from_dir(ufs_context_t* context, ufs_minode_t* minode, uint64_t off) {
+    int ec;
+    ufs_transcation_t transcation;
+    static const _dirent_t dirent = { { 0 }, 0 };
+    size_t writen;
 
+    ufs_transcation_init(&transcation, &context->ufs->jornal);
+    ec = ufs_minode_pwrite(minode, &transcation, &dirent, sizeof(dirent), off, &writen);
+    if(ufs_unlikely(ec == 0 && writen != sizeof(dirent))) ec = UFS_ENOSPC;
+    if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
+    ufs_transcation_deinit(&transcation);
+
+    if(ufs_unlikely(ec)) return ec;
+    return _shrink_dir(minode);
+}
 static int _add_to_dir(ufs_context_t* context, ufs_minode_t* minode, const char* fname, size_t flen, uint64_t inum) {
     int ec;
     ufs_transcation_t transcation;
@@ -84,6 +118,7 @@ static int _add_to_dir(ufs_context_t* context, ufs_minode_t* minode, const char*
     for(;;) {
         ec = ufs_minode_pread(minode, &transcation, &dirent, sizeof(dirent), off, &read);
         if(ufs_unlikely(ec)) break;
+        if(read == 0) break;
         if(read != sizeof(dirent)) { ec = ENOSPC; break; }
         if(_dirent_empty(&dirent)) break;
         off += sizeof(dirent);
@@ -157,7 +192,7 @@ static int __ppath2inum(ufs_context_t* ufs_restrict context, const char* ufs_res
                     return UFS_EACCESS;
                 }
                 ufs_minode_lock(minode);
-                ec = _search_dir(minode, path, &inum, ul_static_cast(size_t, path2 - path));
+                ec = _search_dir(minode, path, &inum, ul_static_cast(size_t, path2 - path), NULL);
                 ufs_minode_unlock(minode);
                 ufs_fileset_close(&context->ufs->fileset, minode->inum);
                 if(ufs_unlikely(ec)) return ec;
@@ -178,9 +213,25 @@ static int _ppath2inum(ufs_context_t* ufs_restrict context, const char* ufs_rest
     return __ppath2inum(context, path, pminode, pfname, 0);
 }
 
-// 不对文件类型做校验
-// UFS_EACCESS / UFS_EEXIST / UFS_ENAMETOOLONG / UFS_ENOTDIR / UFS_ELOOP / UFS_ENOMEM / UFS_ENOENT
-static int _open(ufs_context_t* context, ufs_minode_t** pminode, const char* path, unsigned long flag, uint16_t mask) {
+/**
+ * 打开文件，不对文件本身做检查
+ * 如果creat_inum不为0，则创建时直接使用creat_inum而不是使用mode创建
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_EACCESS] 用户对文件不存在指定权限
+ *   [UFS_EACCESS] 试图截断文件但用户不具备写入权限
+ *   [UFS_ENOSPC] 试图创建文件但磁盘空间不足
+ *   [UFS_EEXIST] 文件被指定创建和排他，但是目标文件已存在
+ *   [UFS_EMLINK] 文件链接数过多
+*/
+static int _open_ex(ufs_context_t* context, ufs_minode_t** pminode, const char* path, unsigned long flag, uint16_t mode, uint64_t creat_inum) {
     ufs_minode_t* file_minode = NULL;
     uint64_t inum = 0;
     int ec;
@@ -200,7 +251,7 @@ static int _open(ufs_context_t* context, ufs_minode_t** pminode, const char* pat
     }
     ufs_minode_lock(ppath_minode);
     if(_check_perm(context->uid, context->gid, &ppath_minode->inode) & UFS_X_OK)
-        ec = _search_dir(ppath_minode, fname, &inum, strlen(fname));
+        ec = _search_dir(ppath_minode, fname, &inum, strlen(fname), NULL);
     else ec = UFS_EACCESS;
     if(ec == 0) {
         if(flag & UFS_O_CREAT) {
@@ -216,12 +267,35 @@ static int _open(ufs_context_t* context, ufs_minode_t** pminode, const char* pat
         }
     }
     if((ec == 0) && (flag & UFS_O_CREAT)) {
-        ufs_inode_create_t creat;
-        creat.uid = context->uid;
-        creat.gid = context->gid;
-        creat.mode = mask | UFS_S_IFREG;
-        ec = ufs_fileset_creat(&context->ufs->fileset, &inum, &file_minode, &creat);
-        if(ufs_likely(ec == 0)) ec = _add_to_dir(context, ppath_minode, fname, strlen(fname), inum);
+        if(!(_check_perm(context->uid, context->gid, &ppath_minode->inode) & UFS_W_OK)) ec = EACCES;
+        else {
+            if(creat_inum) {
+                inum = creat_inum;
+                ec = ufs_fileset_open(&context->ufs->fileset, inum, &file_minode);
+                if(ufs_likely(ec == 0)) {
+                    ufs_minode_lock(file_minode);
+                    if(++file_minode->inode.nlink == 0) {
+                        --file_minode->inode.nlink;
+                        ec = UFS_EMLINK;
+                    }
+                    ufs_minode_unlock(file_minode);
+                }
+            } else {
+                ufs_inode_create_t creat;
+                creat.uid = context->uid;
+                creat.gid = context->gid;
+                creat.mode = mode;
+                ec = ufs_fileset_creat(&context->ufs->fileset, &inum, &file_minode, &creat);
+            }
+            if(ufs_likely(ec == 0)) {
+                ec = _add_to_dir(context, ppath_minode, fname, strlen(fname), inum);
+                if(ufs_unlikely(ec)) {
+                    ufs_minode_lock(file_minode);
+                    --file_minode->inode.nlink;
+                    ufs_minode_unlock(file_minode);
+                }
+            }
+        }
     }
     ufs_minode_unlock(ppath_minode);
     ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
@@ -237,6 +311,25 @@ static int _open(ufs_context_t* context, ufs_minode_t** pminode, const char* pat
     }
     *pminode = file_minode;
     return 0;
+}
+/**
+ * 打开文件，不对文件本身做检查
+ *
+ * 错误：
+ *   [UFS_ENAMETOOLONG] 文件名过长
+ *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
+ *   [UFS_ELOOP] 路径中符号链接层数过深
+ *   [UFS_ENOMEM] 无法分配内存
+ *   [UFS_ENOENT] 路径中存在不存在的目录
+ *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
+ *   [UFS_EACCESS] 试图创建文件但用户不具备对目录的写权限
+ *   [UFS_EACCESS] 用户对文件不存在指定权限
+ *   [UFS_EACCESS] 试图截断文件但用户不具备写入权限
+ *   [UFS_ENOSPC] 试图创建文件但磁盘空间不足
+ *   [UFS_EEXIST] 文件被指定创建和排他，但是目标文件已存在
+*/
+static int _open(ufs_context_t* context, ufs_minode_t** pminode, const char* path, unsigned long flag, uint16_t mode) {
+    return _open_ex(context, pminode, path, flag, mode, 0);
 }
 
 
@@ -264,7 +357,7 @@ UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* pat
     if(ufs_unlikely((flag & UFS_O_RDONLY) && (flag & UFS_O_WRONLY))) return UFS_EINVAL;
 
     mask &= context->umask & 0777u;
-    ec = _open(context, &minode, path, flag, mask);
+    ec = _open(context, &minode, path, flag, mask | UFS_S_IFREG);
     if(ufs_unlikely(ec)) return ec;
     if(!UFS_S_ISREG(minode->inode.mode)) {
         if(UFS_S_ISDIR(minode->inode.mode)) {
@@ -278,7 +371,7 @@ UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* pat
             ufs_fileset_close(&context->ufs->fileset, minode->inum);
             if(ufs_unlikely(ec)) return ec;
             if(stop++ >= UFS_SYMBOL_LOOP_LIMIT) return ELOOP;
-            ec = _open(context, &minode, path, flag, mask);
+            ec = _open(context, &minode, path, flag, mask | UFS_S_IFREG);
             ufs_free(resolved);
             if(ufs_unlikely(ec)) return ec;
         }
@@ -456,6 +549,42 @@ UFS_API int ufs_tell(ufs_file_t* file, uint64_t* poff) {
     return 0;
 }
 
+UFS_API int ufs_fallocate(ufs_file_t* file, uint64_t size) {
+    int ec;
+    uint64_t block;
+    if(ufs_unlikely(file == NULL)) return UFS_EBADF;
+    _file_lock(file);
+    ufs_minode_lock(file->minode);
+    ec = ufs_minode_fallocate(file->minode, (size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE, &block);
+    (void)block;
+    ufs_minode_unlock(file->minode);
+    _file_unlock(file);
+    return ec;
+}
+
+UFS_API int ufs_ftruncate(ufs_file_t* file, uint64_t size) {
+    int ec;
+    if(ufs_unlikely(file == NULL)) return UFS_EBADF;
+    _file_lock(file);
+    ufs_minode_lock(file->minode);
+    if(!(file->flag & UFS_W_OK)) ec = EBADF;
+    else if(!(_check_perm(file->uid, file->gid, &file->minode->inode) & UFS_W_OK)) ec = EACCES;
+    else ec = ufs_minode_resize(file->minode, size);
+    ufs_minode_unlock(file->minode);
+    _file_unlock(file);
+    return ec;
+}
+
+UFS_API int ufs_fsync(ufs_file_t* file, int only_data) {
+    int ec;
+    if(ufs_unlikely(file == NULL)) return UFS_EBADF;
+    _file_lock(file);
+    ufs_minode_lock(file->minode);
+    ec = ufs_minode_sync(file->minode, only_data);
+    ufs_minode_unlock(file->minode);
+    _file_unlock(file);
+    return ec;
+}
 
 
 typedef struct ufs_dir_t {
@@ -468,22 +597,6 @@ typedef struct ufs_dir_t {
 static void _dir_lock(ufs_dir_t* dir) { ulatomic_spinlock_lock(&dir->lock); }
 static void _dir_unlock(ufs_dir_t* dir) { ulatomic_spinlock_unlock(&dir->lock); }
 
-/*
- * 打开目录
- *
- * 错误：
- *   [UFS_EINVAL] context非法
- *   [UFS_EINVAL] pfile为NULL
- *   [UFS_EINVAL] path为NULL或者path为空
- *   [UFS_ENAMETOOLONG] 文件名过长
- *   [UFS_ENOTDIR] 路径中存在非目录或指向非目录的符号链接
- *   [UFS_ENOTDIR] 用户试图打开目录
- *   [UFS_ELOOP] 路径中符号链接层数过深
- *   [UFS_ENOMEM] 无法分配内存
- *   [UFS_ENOENT] 路径中存在不存在的目录
- *   [UFS_EACCESS] 用户对路径中的目录不具备执行权限
- *   [UFS_EACCESS] 用户对目录不具备读权限
-*/
 UFS_API int ufs_opendir(ufs_context_t* context, ufs_dir_t** pdir, const char* path) {
     ufs_minode_t* minode;
     int ec;
@@ -491,8 +604,8 @@ UFS_API int ufs_opendir(ufs_context_t* context, ufs_dir_t** pdir, const char* pa
 
     if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
     if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
-    
-    ec = _open(context, &minode, path, 0, 0664);
+
+    ec = _open(context, &minode, path, 0, 0664 | UFS_S_IFDIR);
     if(ufs_unlikely(ec)) return ec;
     if(!UFS_S_ISDIR(minode->inode.mode)) {
         ufs_fileset_close(&context->ufs->fileset, minode->inum); return UFS_ENOTDIR;
@@ -514,15 +627,6 @@ UFS_API int ufs_opendir(ufs_context_t* context, ufs_dir_t** pdir, const char* pa
     return 0;
 }
 
-/**
- * 读取目录
- * 
- * 错误：
- *   [UFS_EBADF] dir非法
- *   [UFS_EINVAL] dirent为NULL
- *   [UFS_ENOENT] 目录已读取完毕
- *   [UFS_EACCESS] 对目录不具备读入权限
-*/
 UFS_API int ufs_readdir(ufs_dir_t* dir, ufs_dirent_t* dirent) {
     int ec;
     uint64_t off;
@@ -532,7 +636,7 @@ UFS_API int ufs_readdir(ufs_dir_t* dir, ufs_dirent_t* dirent) {
 
     if(ufs_unlikely(dir == NULL)) return UFS_EBADF;
     if(ufs_unlikely(dirent == NULL)) return UFS_EINVAL;
-    
+
     _dir_lock(dir);
     ufs_minode_lock(dir->minode);
     ufs_transcation_init(&transcation, &dir->minode->ufs->jornal);
@@ -563,12 +667,7 @@ do_return:
     _dir_unlock(dir);
     return ec;
 }
-/**
- * 定位目录
- * 
- * 错误：
- *   [UFS_EBADF] dir非法
-*/
+
 UFS_API int ufs_seekdir(ufs_dir_t* dir, uint64_t off) {
     if(ufs_unlikely(dir == NULL)) return UFS_EBADF;
     off -= off % sizeof(_dirent_t);
@@ -577,13 +676,7 @@ UFS_API int ufs_seekdir(ufs_dir_t* dir, uint64_t off) {
     _dir_unlock(dir);
     return 0;
 }
-/**
- * 获得目录定位
- * 
- * 错误：
- *   [UFS_EBADF] dir非法
- *   [UFS_EINVAL] poff非法
-*/
+
 UFS_API int ufs_telldir(ufs_dir_t* dir, uint64_t* poff) {
     if(ufs_unlikely(dir == NULL)) return UFS_EBADF;
     if(ufs_unlikely(poff == NULL)) return UFS_EINVAL;
@@ -592,18 +685,11 @@ UFS_API int ufs_telldir(ufs_dir_t* dir, uint64_t* poff) {
     _dir_unlock(dir);
     return 0;
 }
-/**
- * 定位目录到初始状态
-*/
+
 UFS_API int ufs_rewinddir(ufs_dir_t* dir) {
     return ufs_seekdir(dir, 0);
 }
-/**
- * 关闭目录
- * 
- * 错误：
- *   [UFS_EBADF] dir非法
-*/
+
 UFS_API int ufs_closedir(ufs_dir_t* dir) {
     int ec;
     if(ufs_unlikely(dir == NULL)) return UFS_EBADF;
@@ -611,6 +697,195 @@ UFS_API int ufs_closedir(ufs_dir_t* dir) {
     ufs_free(dir);
     return ec;
 }
+
+
+
+UFS_API int ufs_mkdir(ufs_context_t* context, const char* path, uint16_t mode) {
+    int ec;
+    ufs_minode_t* minode;
+
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+
+    ec = _open(context, &minode, path, UFS_O_CREAT | UFS_O_EXCL, (mode & UFS_S_IALL) | UFS_S_IFDIR);
+    if(ufs_unlikely(ec)) return ec;
+    return ufs_fileset_close(&context->ufs->fileset, minode->inum);
+}
+
+UFS_API int ufs_rmdir(ufs_context_t* context, const char* path) {
+    int ec;
+    ufs_minode_t* minode;
+    ufs_minode_t* ppath_minode;
+    const char* fname;
+    uint64_t inum;
+    uint64_t off;
+
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+
+    ec = _ppath2inum(context, path, &ppath_minode, &fname);
+    if(ufs_unlikely(ec)) return ec;
+    if(fname[0] == 0) { // 根目录不可删除
+        ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
+        return UFS_EACCESS;
+    }
+    ufs_minode_lock(ppath_minode);
+    if(_check_perm(context->uid, context->gid, &ppath_minode->inode) & (UFS_W_OK | UFS_X_OK))
+        ec = _search_dir(ppath_minode, fname, &inum, strlen(fname), &off);
+    else ec = UFS_EACCESS;
+    if(ec == 0) ec = ufs_fileset_open(&context->ufs->fileset, inum, &minode);
+    if(ec == 0 && !UFS_S_ISDIR(minode->inode.mode)) ec = ENOTDIR;
+    if(ec == 0) {
+        ufs_minode_lock(minode);
+        ec = _shrink_dir(minode);
+        if(ufs_likely(ec == 0)) {
+            if(minode->inode.size == 0) ec = _delete_from_dir(context, ppath_minode, off);
+            else ec = UFS_ENOTEMPTY;
+        }
+        ufs_minode_unlock(minode);
+    }
+    ufs_minode_unlock(ppath_minode);
+    ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
+    if(ec) return ec;
+
+    ufs_minode_lock(minode);
+    --minode->inode.nlink;
+    ufs_minode_unlock(minode);
+    return ufs_fileset_close(&context->ufs->fileset, minode->inum);
+}
+
+UFS_API int ufs_unlink(ufs_context_t* context, const char* path) {
+    int ec;
+    ufs_minode_t* minode;
+    ufs_minode_t* ppath_minode;
+    const char* fname;
+    uint64_t inum;
+    uint64_t off;
+
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+
+    ec = _ppath2inum(context, path, &ppath_minode, &fname);
+    if(ufs_unlikely(ec)) return ec;
+    if(fname[0] == 0) { // 根目录不可删除
+        ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
+        return UFS_EACCESS;
+    }
+    ufs_minode_lock(ppath_minode);
+    if(_check_perm(context->uid, context->gid, &ppath_minode->inode) & (UFS_W_OK | UFS_X_OK))
+        ec = _search_dir(ppath_minode, fname, &inum, strlen(fname), &off);
+    else ec = UFS_EACCESS;
+    if(ec == 0) ec = ufs_fileset_open(&context->ufs->fileset, inum, &minode);
+    if(ec == 0 && UFS_S_ISDIR(minode->inode.mode)) ec = EISDIR;
+    if(ec == 0) ec = _delete_from_dir(context, ppath_minode, off);
+    ufs_minode_unlock(ppath_minode);
+    ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
+    if(ec) return ec;
+
+    ufs_minode_lock(minode);
+    --minode->inode.nlink;
+    ufs_minode_unlock(minode);
+    return ufs_fileset_close(&context->ufs->fileset, minode->inum);
+}
+
+UFS_API int ufs_link(ufs_context_t* context, const char* target, const char* source) {
+    int ec;
+    ufs_minode_t* tinode;
+    ufs_minode_t* sinode;
+    ec = _open(context, &sinode, source, 0, 0);
+    if(ufs_unlikely(ec)) return ec;
+    if(ufs_likely(!UFS_S_ISDIR(sinode->inode.mode)))
+        ec = _open_ex(context, &tinode, target, UFS_O_CREAT | UFS_O_EXCL, 0777, sinode->inum);
+    else ec = EISDIR;
+    ufs_fileset_close(&context->ufs->fileset, sinode->inum);
+    if(ufs_unlikely(ec)) return ec;
+    ufs_fileset_close(&context->ufs->fileset, tinode->inum);
+    return 0;
+}
+
+UFS_API int ufs_symlink(ufs_context_t* context, const char* target, const char* source) {
+    int ec, ec2;
+    ufs_transcation_t transcation;
+    size_t len, writen;
+    ufs_minode_t* minode;
+
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(target == NULL || target[0] == 0)) return UFS_EINVAL;
+    if(ufs_unlikely(source == NULL || source[0] == 0)) return UFS_EINVAL;
+    len = strlen(source) + 1;
+    if(len > UFS_BLOCK_SIZE) return UFS_EOVERFLOW;
+
+    ec = _open(context, &minode, target, UFS_O_CREAT | UFS_O_EXCL, 0777 | UFS_S_IFLNK);
+    if(ufs_unlikely(ec)) return ec;
+
+    ufs_transcation_init(&transcation, &context->ufs->jornal);
+    ufs_minode_lock(minode);
+    ec = ufs_minode_pwrite(minode, &transcation, source, len, 0, &writen);
+    if(ufs_likely(ec == 0 && writen != len)) ec = ENOSPC;
+    if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
+    ufs_minode_unlock(minode);
+    ufs_transcation_deinit(&transcation);
+
+    ec2 = ufs_fileset_close(&context->ufs->fileset, minode->inum);
+    return ec ? ec : ec2;
+}
+
+UFS_API int ufs_readlink(ufs_context_t* context, const char* source, char** presolved) {
+    int ec;
+    ufs_minode_t* minode;
+
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(source == NULL || source[0] == 0)) return UFS_EINVAL;
+    if(ufs_unlikely(presolved == NULL)) return UFS_EINVAL;
+
+
+    ec = _open(context, &minode, source, 0, 0);
+    if(ufs_unlikely(ec)) return ec;
+    if(ufs_likely(UFS_S_ISLNK(minode->inode.mode))) ec = _readlink(context, minode, presolved);
+    else ec = UFS_EFTYPE;
+    ufs_fileset_close(&context->ufs->fileset, minode->inum);
+    return ec;
+}
+
+
+
+static void _stat(ufs_minode_t* inode, ufs_stat_t* stat) {
+    stat->st_ino = inode->inum;
+    stat->st_mode = inode->inode.mode;
+    stat->st_nlink = inode->inode.nlink;
+    stat->st_uid = inode->inode.uid;
+    stat->st_gid = inode->inode.gid;
+    stat->st_size = inode->inode.size;
+    stat->st_blksize = UFS_BLOCK_SIZE;
+    stat->st_blocks = inode->inode.blocks;
+    stat->st_ctime = inode->inode.ctime;
+    stat->st_atime = inode->inode.atime;
+    stat->st_mtime = inode->inode.mtime;
+}
+UFS_API int ufs_fstat(ufs_file_t* file, ufs_stat_t* stat) {
+    if(ufs_unlikely(file == NULL)) return UFS_EBADF;
+    if(ufs_unlikely(stat == NULL)) return UFS_EINVAL;
+
+    ufs_minode_lock(file->minode);
+    _stat(file->minode, stat);
+    ufs_minode_unlock(file->minode);
+    return 0;
+}
+UFS_API int ufs_stat(ufs_context_t* context, const char* path, ufs_stat_t* stat) {
+    int ec;
+    ufs_file_t* file;
+
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
+
+    ec = ufs_open(context, &file, path, 0, 0664);
+    if(ufs_unlikely(ec)) return ec;
+    ec = ufs_fstat(file, stat);
+    ufs_close(file);
+    return ec;
+}
+
+
 
 UFS_HIDDEN void ufs_file_debug(const ufs_file_t* file, FILE* fp) {
     fprintf(fp, "file [%p]\n", ufs_const_cast(void*, file));

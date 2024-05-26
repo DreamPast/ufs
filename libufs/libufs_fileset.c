@@ -11,7 +11,7 @@ static int _node_comp(void* opaque, const void* lhs, const void* rhs) {
     const uint64_t lv = *ul_reinterpret_cast(const uint64_t*, lhs);
     const uint64_t rv = *ul_reinterpret_cast(const uint64_t*, rhs);
     (void)opaque;
-    return lv < rv ? 0 : lv > rv;
+    return lv < rv ? -1 : lv > rv;
 }
 
 static void _node_destroy(void* opaque, ulrb_node_t* _node) {
