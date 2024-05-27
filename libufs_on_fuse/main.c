@@ -96,9 +96,18 @@ static int _fuse_open(const char* path, struct fuse_file_info* fi) {
     unsigned long mode = 0;
     ufs_file_t* file;
     ufs_context_t ctx; _make_context(&ctx);
-    if(fi->flags & O_RDONLY) mode |= UFS_O_RDONLY;
+#ifdef O_ACCMODE
+    switch(fi->flags & O_ACCMODE) {
+    case O_RDONLY: mode |= UFS_O_RDONLY; break;
+    case O_WRONLY: mode |= UFS_O_WRONLY; break;
+    case O_RDWR: mode |= UFS_O_RDWR; break;
+    default: return -EINVAL;
+    }
+#else
     if(fi->flags & O_WRONLY) mode |= UFS_O_WRONLY;
-    if(fi->flags & O_RDWR) mode |= UFS_O_RDWR;
+    else if(fi->flags & O_RDWR) mode |= UFS_O_RDWR;
+    else mode |= UFS_O_RDONLY;
+#endif
     if(fi->flags & O_CREAT) mode |= UFS_O_CREAT;
     if(fi->flags & O_APPEND) mode |= UFS_O_APPEND;
     if(fi->flags & O_TRUNC) mode |= UFS_O_TRUNC;
@@ -203,6 +212,10 @@ static int _fuse_utime(const char* path, struct utimbuf* buf) {
     mtime = (int64_t)buf->modtime * 1000;
     return -ufs_uniform_error(ufs_utimes(&ctx, path, NULL, &atime, &mtime));
 }
+static int _fuse_rename(const char* oldpath, const char* newpath) {
+    ufs_context_t ctx; _make_context(&ctx);
+    return -ufs_uniform_error(ufs_rename(&ctx, oldpath, newpath));
+}
 
 static struct fuse_operations _fuse_ops = {
     .getattr = _fuse_getattr,
@@ -212,7 +225,7 @@ static struct fuse_operations _fuse_ops = {
     .unlink = _fuse_unlink,
     .rmdir = _fuse_rmdir,
     .symlink = _fuse_symlink,
-    .rename = NULL,
+    .rename = _fuse_rename,
     .link = _fuse_link,
     .chmod = _fuse_chmod,
     .chown = _fuse_chown,
@@ -236,7 +249,7 @@ static struct fuse_operations _fuse_ops = {
     .access = _fuse_access,
     .create = _fuse_create,
     .utime = _fuse_utime,
-    .truncate = _fuse_truncate
+    .truncate = _fuse_truncate,
 };
 
 

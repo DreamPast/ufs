@@ -596,6 +596,10 @@ UFS_API int ufs_utimes(ufs_context_t* context, const char* path, int64_t* ctime,
  * 截断文件
 */
 UFS_API int ufs_truncate(ufs_context_t* context, const char* path, uint64_t size);
+/**
+ * 重命名文件
+*/
+UFS_API int ufs_rename(ufs_context_t* context, const char* oldname, const char* newname);
 
 #ifdef __cplusplus
 }

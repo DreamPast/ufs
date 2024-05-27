@@ -759,7 +759,10 @@ UFS_API int ufs_rmdir(ufs_context_t* context, const char* path) {
     }
     ufs_minode_unlock(ppath_minode);
     ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
-    if(ec) return ec;
+    if(ufs_unlikely(ec)) {
+        if(minode) ufs_fileset_close(&context->ufs->fileset, minode->inum);
+        return ec;
+    }
 
     ufs_minode_lock(minode);
     --minode->inode.nlink;
@@ -793,7 +796,10 @@ UFS_API int ufs_unlink(ufs_context_t* context, const char* path) {
     if(ec == 0) ec = _delete_from_dir(context, ppath_minode, off);
     ufs_minode_unlock(ppath_minode);
     ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
-    if(ec) return ec;
+    if(ufs_unlikely(ec)) {
+        if(minode) ufs_fileset_close(&context->ufs->fileset, minode->inum);
+        return ec;
+    }
 
     ufs_minode_lock(minode);
     --minode->inode.nlink;
@@ -983,6 +989,47 @@ UFS_API int ufs_truncate(ufs_context_t* context, const char* path, uint64_t size
     ufs_minode_unlock(minode);
     ufs_fileset_close(&context->ufs->fileset, minode->inum);
     return ec;
+}
+UFS_API int ufs_rename(ufs_context_t* context, const char* oldname, const char* newname) {
+    int ec;
+    ufs_minode_t* minode;
+    ufs_minode_t* ppath_minode;
+    ufs_minode_t* new_minode;
+    const char* fname;
+    uint64_t inum, off;
+
+    if(ufs_unlikely(context == NULL || context->ufs == NULL)) return UFS_EINVAL;
+    if(ufs_unlikely(oldname == NULL || oldname[0] == 0)) return UFS_EINVAL;
+    if(ufs_unlikely(newname == NULL || newname[0] == 0)) return UFS_EINVAL;
+    
+    ec = _ppath2inum(context, oldname, &ppath_minode, &fname);
+    if(ufs_unlikely(ec)) return ec;
+    if(fname[0] == 0) { // 根目录不可删除
+        ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
+        return UFS_EACCESS;
+    }
+    ufs_minode_lock(ppath_minode);
+    if(_check_perm(context->uid, context->gid, &ppath_minode->inode) & (UFS_W_OK | UFS_X_OK))
+        ec = _search_dir(ppath_minode, fname, &inum, strlen(fname), &off);
+    else ec = UFS_EACCESS;
+    if(ec == 0) ec = ufs_fileset_open(&context->ufs->fileset, inum, &minode);
+    if(ec == 0) ec = _delete_from_dir(context, ppath_minode, off);
+    ufs_minode_unlock(ppath_minode);
+    ufs_fileset_close(&context->ufs->fileset, ppath_minode->inum);
+    if(ufs_unlikely(ec)) {
+        if(minode) ufs_fileset_close(&context->ufs->fileset, minode->inum);
+        return ec;
+    }
+
+    ec = _open_ex(context, &new_minode, newname, _UFS_O_NOFOLLOW | UFS_O_CREAT | UFS_O_EXCL, 0, minode->inum);
+    if(ufs_likely(ec == 0)) {
+        ufs_minode_lock(minode);
+        --minode->inode.nlink;
+        ufs_minode_unlock(minode);
+        ufs_fileset_close(&context->ufs->fileset, minode->inum);
+    }
+
+    return ufs_fileset_close(&context->ufs->fileset, minode->inum);
 }
 
 UFS_HIDDEN void ufs_file_debug(const ufs_file_t* file, FILE* fp) {
