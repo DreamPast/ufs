@@ -179,7 +179,7 @@ static int __ppath2inum(ufs_context_t* ufs_restrict context, const char* ufs_res
                 ufs_minode_unlock(minode);
                 if(ufs_unlikely(ec)) { ufs_fileset_close(&context->ufs->fileset, minode->inum); return ec; }
                 ufs_fileset_close(&context->ufs->fileset, minode->inum);
-                ec = __ppath2inum(context, resolved, pminode, NULL, sloop + 1);
+                ec = __ppath2inum(context, resolved, &minode, NULL, sloop + 1);
                 ufs_free(resolved);
                 if(ufs_unlikely(ec)) return ec;
             }
@@ -381,7 +381,7 @@ UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* pat
     if(ufs_unlikely(path == NULL || path[0] == 0)) return UFS_EINVAL;
     if(ufs_unlikely((flag & UFS_O_RDONLY) && (flag & UFS_O_WRONLY))) return UFS_EINVAL;
 
-    mask &= context->umask & 0777u;
+    mask &= ~context->umask & 0777u;
     ec = _open(context, &minode, path, (flag & 0xFF), (mask & 0777) | UFS_S_IFREG);
     if(ufs_unlikely(ec)) return ec;
     if(UFS_S_ISDIR(minode->inode.mode)) {
@@ -403,13 +403,18 @@ UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* pat
     if(flag & UFS_O_EXEC) file->flag |= UFS_X_OK;
 
     do {
-        int access = _check_perm(context->uid, context->gid, &minode->inode);
+        int access;
         ufs_minode_lock(minode);
+        access = _check_perm(context->uid, context->gid, &minode->inode);
+        ufs_minode_unlock(minode);
         if((file->flag & UFS_R_OK) && !(access & UFS_R_OK)) ec = EACCES;
         if((file->flag & UFS_W_OK) && !(access & UFS_W_OK)) ec = EACCES;
         if((file->flag & UFS_X_OK) && !(access & UFS_X_OK)) ec = EACCES;
-        ufs_minode_unlock(minode);
-        if(ufs_unlikely(ec)) { ufs_fileset_close(&context->ufs->fileset, minode->inum); return ec; }
+        if(ufs_unlikely(ec)) {
+            ufs_fileset_close(&context->ufs->fileset, minode->inum);
+            ufs_free(file);
+            return ec;
+        }
     } while(0);
 
     if(flag & UFS_O_APPEND) file->flag |= _OPEN_APPEND;
@@ -418,13 +423,18 @@ UFS_API int ufs_open(ufs_context_t* context, ufs_file_t** pfile, const char* pat
         if(_check_perm(context->uid, context->gid, &minode->inode) & UFS_W_OK) ec = ufs_minode_resize(minode, 0);
         else ec = UFS_EACCESS;
         ufs_minode_unlock(minode);
+        if(ufs_unlikely(ec)) {
+            ufs_fileset_close(&context->ufs->fileset, minode->inum);
+            ufs_free(file);
+            return ec;
+        }
     }
     *pfile = file;
     return 0;
 }
 
 UFS_API int ufs_creat(ufs_context_t* context, ufs_file_t** pfile, const char* path, uint16_t mask) {
-    return ufs_open(context, pfile, path, UFS_O_RDWR | UFS_O_CREAT, mask);
+    return ufs_open(context, pfile, path, UFS_O_CREAT | UFS_O_WRONLY | UFS_O_TRUNC, mask);
 }
 
 UFS_API int ufs_close(ufs_file_t* file) {

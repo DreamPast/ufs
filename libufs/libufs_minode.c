@@ -417,17 +417,21 @@ UFS_HIDDEN int ufs_minode_deinit(ufs_minode_t* inode) {
     ufs_transcation_t transcation;
     ufs_transcation_init(&transcation, &inode->ufs->jornal);
     if(ufs_unlikely(inode->inode.nlink == 0)) {
+        ec = ufs_minode_shrink(inode, 0);
+        if(ufs_unlikely(ec)) return ec;
+
         ufs_ilist_lock(&inode->ufs->ilist, &transcation);
         ec = ufs_ilist_push(&inode->ufs->ilist, inode->inum);
         ec = _write_inode(&transcation, &inode->inode, inode->inum);
         if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
         ufs_ilist_unlock(&inode->ufs->ilist);
+        ufs_transcation_deinit(&transcation);
     } else {
         ec = _write_inode(&transcation, &inode->inode, inode->inum);
         if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
+        ufs_transcation_deinit(&transcation);
+        return ec;
     }
-    ufs_transcation_deinit(&transcation);
-    return ec;
 }
 
 
