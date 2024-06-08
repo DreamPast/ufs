@@ -102,8 +102,9 @@ static void list_dir_detail1(ufs_context_t* context, const char* path) {
         ufs_ptime(stat.st_mtim, NULL, stdout);
         putchar('\t');
 
-        printf("%s\t", dirent.d_name);
+        printf("%s\n", dirent.d_name);
         
+        fputs("\t\t", stdout);
         printf("[%" PRIu64 "]\t", addrinfo.inode_off);
         for(i = 0; i < 16; ++i) {
             printf("[%" PRIu64 "]", addrinfo.zone_off[i]);
