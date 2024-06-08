@@ -277,7 +277,7 @@ UFS_API int ufs_new_format(ufs_t** pufs, ufs_vfs_t* vfs, uint64_t size) {
         inode.blocks = 0;
         inode.ctime = ufs_time(0);
         inode.mtime = inode.ctime;
-        inode.atime = inode.atime;
+        inode.atime = inode.ctime;
         inode.uid = 0;
         inode.gid = 0;
         memset(inode.zones, 0, sizeof(inode.zones));

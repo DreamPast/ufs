@@ -601,6 +601,15 @@ UFS_API int ufs_truncate(ufs_context_t* context, const char* path, uint64_t size
 */
 UFS_API int ufs_rename(ufs_context_t* context, const char* oldname, const char* newname);
 
+/**
+ * 获得文件的物理地址
+ */
+typedef struct ufs_physics_addr_t {
+    uint64_t inode_off;
+    uint64_t zone_off[16];
+} ufs_physics_addr_t;
+UFS_API int ufs_physics_addr(ufs_context_t* context, const char* name, ufs_physics_addr_t* addr);
+
 #ifdef __cplusplus
 }
 #endif

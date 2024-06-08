@@ -1041,6 +1041,19 @@ UFS_API int ufs_rename(ufs_context_t* context, const char* oldname, const char* 
 
     return ufs_fileset_close(&context->ufs->fileset, minode->inum);
 }
+UFS_API int ufs_physics_addr(ufs_context_t* context, const char* name, ufs_physics_addr_t* addr) {
+    int ec, i;
+    ufs_minode_t* minode;
+    ec = _open(context, &minode, name, _UFS_O_NOFOLLOW, 0664);
+    if(ufs_unlikely(ec)) return ec;
+
+    ufs_minode_lock(minode);
+    addr->inode_off = minode->inum * UFS_INODE_DISK_SIZE;
+    for(i = 0; i < 16; ++i)
+        addr->zone_off[i] = minode->inode.zones[i] * UFS_BLOCK_SIZE;
+    ufs_minode_unlock(minode);
+    return ufs_fileset_close(&context->ufs->fileset, minode->inum);
+}
 
 UFS_HIDDEN void ufs_file_debug(const ufs_file_t* file, FILE* fp) {
     fprintf(fp, "file [%p]\n", ufs_const_cast(void*, file));

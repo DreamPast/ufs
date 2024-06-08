@@ -426,6 +426,7 @@ UFS_HIDDEN int ufs_minode_deinit(ufs_minode_t* inode) {
         if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
         ufs_ilist_unlock(&inode->ufs->ilist);
         ufs_transcation_deinit(&transcation);
+        return ec;
     } else {
         ec = _write_inode(&transcation, &inode->inode, inode->inum);
         if(ufs_likely(ec == 0)) ec = ufs_transcation_commit_all(&transcation);
